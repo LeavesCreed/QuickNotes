@@ -25,6 +25,7 @@
     <ProjectReference Include="..\..\src\StickyNotes.Domain\StickyNotes.Domain.csproj" />
     <ProjectReference Include="..\..\src\StickyNotes.Application\StickyNotes.Application.csproj" />
     <ProjectReference Include="..\..\src\StickyNotes.Infrastructure.Sqlite\StickyNotes.Infrastructure.Sqlite.csproj" />
+    <ProjectReference Include="..\..\src\StickyNotes.Infrastructure.Drafts\StickyNotes.Infrastructure.Drafts.csproj" />
   </ItemGroup>
 
 </Project>

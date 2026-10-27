@@ -5,14 +5,25 @@ namespace StickyNotes.Infrastructure.Sqlite;
 public sealed class SqliteConnectionFactory
 {
     private readonly string _connectionString;
+    private readonly int _busyTimeoutMilliseconds;
 
-    public SqliteConnectionFactory(string databasePath)
+    public SqliteConnectionFactory(string databasePath, int busyTimeoutMilliseconds = 250)
     {
+        if (busyTimeoutMilliseconds < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(busyTimeoutMilliseconds),
+                busyTimeoutMilliseconds,
+                "Busy timeout must be non-negative.");
+        }
+
+        _busyTimeoutMilliseconds = busyTimeoutMilliseconds;
         _connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = databasePath,
             Mode = SqliteOpenMode.ReadWriteCreate,
-            Pooling = false
+            Pooling = false,
+            DefaultTimeout = Math.Max(1, (int)Math.Ceiling(busyTimeoutMilliseconds / 1000.0))
         }.ToString();
     }
 
@@ -23,9 +34,15 @@ public sealed class SqliteConnectionFactory
         {
             await connection.OpenAsync(cancellationToken);
             await using var command = connection.CreateCommand();
-            command.CommandText = "PRAGMA foreign_keys=ON;";
+            command.CommandText =
+                $"PRAGMA foreign_keys=ON; PRAGMA busy_timeout={_busyTimeoutMilliseconds};";
             await command.ExecuteNonQueryAsync(cancellationToken);
             return connection;
+        }
+        catch (SqliteException exception)
+        {
+            await connection.DisposeAsync();
+            throw SqliteErrorTranslator.Translate(exception, "open", noteId: null, cancellationToken);
         }
         catch
         {
