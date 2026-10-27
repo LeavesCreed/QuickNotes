@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("WindowsWindowTrayPrototype")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+36e13f5e95fb39e025a84cb34c2772113d01d8cb")]
 [assembly: System.Reflection.AssemblyProductAttribute("WindowsWindowTrayPrototype")]
 [assembly: System.Reflection.AssemblyTitleAttribute("WindowsWindowTrayPrototype")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
