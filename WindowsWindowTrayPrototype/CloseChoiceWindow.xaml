@@ -1,0 +1,15 @@
+<Window x:Class="WindowsWindowTrayPrototype.CloseChoiceWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="关闭主管理窗口" SizeToContent="WidthAndHeight"
+        ResizeMode="NoResize" WindowStartupLocation="CenterOwner">
+    <StackPanel Margin="22" Width="390">
+        <TextBlock Text="你希望如何处理主管理窗口？"
+                   FontSize="17" FontWeight="SemiBold" Margin="0,0,0,8"/>
+        <TextBlock Text="“缩小到系统托盘”会让软件继续运行，桌面便签保持各自状态。"
+                   TextWrapping="Wrap" Margin="0,0,0,18"/>
+        <Button Content="关闭应用" Click="Exit_Click" Padding="12,8" Margin="0,0,0,8"/>
+        <Button Content="缩小到系统托盘" Click="HideToTray_Click" Padding="12,8" Margin="0,0,0,8"/>
+        <Button Content="取消" Click="Cancel_Click" Padding="12,8"/>
+    </StackPanel>
+</Window>

@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "dgSpecHash": "CSU4R/JfrPs=",
+  "success": true,
+  "projectFilePath": "D:\\GitHub\\QuickNote\\WindowsWindowTrayPrototype\\WindowsWindowTrayPrototype.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\LeavesCreed\\.nuget\\packages\\microsoft.netcore.app.ref\\10.0.13\\microsoft.netcore.app.ref.10.0.13.nupkg.sha512",
+    "C:\\Users\\LeavesCreed\\.nuget\\packages\\microsoft.windowsdesktop.app.ref\\10.0.13\\microsoft.windowsdesktop.app.ref.10.0.13.nupkg.sha512",
+    "C:\\Users\\LeavesCreed\\.nuget\\packages\\microsoft.aspnetcore.app.ref\\10.0.13\\microsoft.aspnetcore.app.ref.10.0.13.nupkg.sha512",
+    "C:\\Users\\LeavesCreed\\.nuget\\packages\\microsoft.netcore.app.host.win-x64\\10.0.13\\microsoft.netcore.app.host.win-x64.10.0.13.nupkg.sha512"
+  ],
+  "logs": []
+}

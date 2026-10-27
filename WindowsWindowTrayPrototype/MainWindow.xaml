@@ -1,0 +1,43 @@
+<Window x:Class="WindowsWindowTrayPrototype.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="窗口与托盘验证原型" Height="650" Width="900"
+        MinHeight="560" MinWidth="760"
+        WindowStartupLocation="CenterScreen"
+        SourceInitialized="MainWindow_SourceInitialized"
+        Closing="MainWindow_Closing">
+    <DockPanel Margin="18">
+        <StackPanel DockPanel.Dock="Top">
+            <TextBlock Text="Windows 窗口与系统托盘验证原型"
+                       FontSize="23" FontWeight="SemiBold" Margin="0,0,0,6"/>
+            <TextBlock Text="此原型只验证窗口、托盘、快捷键和显示状态，不连接正式便签数据库。"
+                       Foreground="DimGray" TextWrapping="Wrap" Margin="0,0,0,14"/>
+            <WrapPanel Margin="0,0,0,10">
+                <Button Content="新建便签" Click="NewNote_Click" Padding="14,7" Margin="0,0,8,8"/>
+                <Button Content="创建 20 张测试便签" Click="CreateTwenty_Click" Padding="14,7" Margin="0,0,8,8"/>
+                <Button Content="显示全部" Click="ShowAll_Click" Padding="14,7" Margin="0,0,8,8"/>
+                <Button Content="全局隐藏／恢复" Click="ToggleGlobalHide_Click" Padding="14,7" Margin="0,0,8,8"/>
+                <Button Content="定位所选便签" Click="LocateSelected_Click" Padding="14,7" Margin="0,0,8,8"/>
+                <Button Content="隐藏所选便签" Click="HideSelected_Click" Padding="14,7" Margin="0,0,8,8"/>
+                <Button Content="切换所选便签置顶" Click="ToggleTopmostSelected_Click" Padding="14,7" Margin="0,0,8,8"/>
+                <Button Content="快捷键设置" Click="Hotkeys_Click" Padding="14,7" Margin="0,0,8,8"/>
+                <Button Content="隐藏管理中心到托盘" Click="HideToTray_Click" Padding="14,7" Margin="0,0,8,8"/>
+            </WrapPanel>
+        </StackPanel>
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="2*"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="3*"/>
+            </Grid.RowDefinitions>
+            <GroupBox Header="便签窗口（选中后可定位、隐藏或切换置顶）" Grid.Row="0" Padding="8">
+                <ListBox x:Name="NotesList" SelectionMode="Single"/>
+            </GroupBox>
+            <TextBlock Grid.Row="1" Margin="0,10,0,5" FontWeight="SemiBold"
+                       Text="运行日志（用于记录快捷键注册结果和操作行为）"/>
+            <TextBox x:Name="LogBox" Grid.Row="2" IsReadOnly="True" AcceptsReturn="True"
+                     VerticalScrollBarVisibility="Auto" TextWrapping="Wrap"
+                     FontFamily="Consolas" FontSize="12"/>
+        </Grid>
+    </DockPanel>
+</Window>
