@@ -125,13 +125,13 @@ PRD。
 
 ``` text
 src/
-  StickyNotes.Domain/
-  StickyNotes.Application/
-  StickyNotes.Infrastructure.Sqlite/
-  StickyNotes.Infrastructure.Backup/
+  QuickNotes.Domain/
+  QuickNotes.Application/
+  QuickNotes.Infrastructure.Sqlite/
+  QuickNotes.Infrastructure.Backup/
 tests/
-  StickyNotes.UnitTests/
-  StickyNotes.IntegrationTests/
+  QuickNotes.UnitTests/
+  QuickNotes.IntegrationTests/
 docs/
   product/PRD_v1.0.md
   agent/Agent对接文档_B阶段.md

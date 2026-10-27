@@ -27,10 +27,10 @@
 ## File Structure
 
 - `QuickNotes.DataPrototype.sln`: builds the four B1 projects without referencing the WPF prototype.
-- `src/StickyNotes.Domain/`: note/category/tag entities and lifecycle/display enums.
-- `src/StickyNotes.Application/`: repository contracts and `NoteConcurrencyException`.
-- `src/StickyNotes.Infrastructure.Sqlite/`: connection factory, schema initialization, catalog repository, note repository.
-- `tests/StickyNotes.IntegrationTests/`: temporary database fixture plus schema, CRUD, transaction, conflict, and reopen tests.
+- `src/QuickNotes.Domain/`: note/category/tag entities and lifecycle/display enums.
+- `src/QuickNotes.Application/`: repository contracts and `NoteConcurrencyException`.
+- `src/QuickNotes.Infrastructure.Sqlite/`: connection factory, schema initialization, catalog repository, note repository.
+- `tests/QuickNotes.IntegrationTests/`: temporary database fixture plus schema, CRUD, transaction, conflict, and reopen tests.
 
 ---
 
@@ -38,18 +38,18 @@
 
 **Files:**
 - Create: `QuickNotes.DataPrototype.sln`
-- Create: `src/StickyNotes.Domain/StickyNotes.Domain.csproj`
-- Create: `src/StickyNotes.Domain/NoteLifecycle.cs`
-- Create: `src/StickyNotes.Domain/NoteDisplayIntent.cs`
-- Create: `src/StickyNotes.Domain/Note.cs`
-- Create: `src/StickyNotes.Domain/Category.cs`
-- Create: `src/StickyNotes.Domain/Tag.cs`
-- Create: `src/StickyNotes.Domain/NoteTag.cs`
-- Create: `src/StickyNotes.Infrastructure.Sqlite/StickyNotes.Infrastructure.Sqlite.csproj`
-- Create: `src/StickyNotes.Infrastructure.Sqlite/SqliteConnectionFactory.cs`
-- Create: `src/StickyNotes.Infrastructure.Sqlite/SqliteSchema.cs`
-- Test: `tests/StickyNotes.IntegrationTests/SqliteSchemaTests.cs`
-- Test: `tests/StickyNotes.IntegrationTests/TemporaryDatabase.cs`
+- Create: `src/QuickNotes.Domain/QuickNotes.Domain.csproj`
+- Create: `src/QuickNotes.Domain/NoteLifecycle.cs`
+- Create: `src/QuickNotes.Domain/NoteDisplayIntent.cs`
+- Create: `src/QuickNotes.Domain/Note.cs`
+- Create: `src/QuickNotes.Domain/Category.cs`
+- Create: `src/QuickNotes.Domain/Tag.cs`
+- Create: `src/QuickNotes.Domain/NoteTag.cs`
+- Create: `src/QuickNotes.Infrastructure.Sqlite/QuickNotes.Infrastructure.Sqlite.csproj`
+- Create: `src/QuickNotes.Infrastructure.Sqlite/SqliteConnectionFactory.cs`
+- Create: `src/QuickNotes.Infrastructure.Sqlite/SqliteSchema.cs`
+- Test: `tests/QuickNotes.IntegrationTests/SqliteSchemaTests.cs`
+- Test: `tests/QuickNotes.IntegrationTests/TemporaryDatabase.cs`
 
 **Interfaces:**
 - Consumes: installed .NET 10 SDK and NuGet.org source verified during B0.
@@ -59,18 +59,18 @@
 
 ```bash
 dotnet new sln -n QuickNotes.DataPrototype
-dotnet new classlib -n StickyNotes.Domain -o src/StickyNotes.Domain -f net10.0
-dotnet new classlib -n StickyNotes.Application -o src/StickyNotes.Application -f net10.0
-dotnet new classlib -n StickyNotes.Infrastructure.Sqlite -o src/StickyNotes.Infrastructure.Sqlite -f net10.0
-dotnet new xunit -n StickyNotes.IntegrationTests -o tests/StickyNotes.IntegrationTests -f net10.0
-dotnet sln QuickNotes.DataPrototype.sln add src/StickyNotes.Domain/StickyNotes.Domain.csproj src/StickyNotes.Application/StickyNotes.Application.csproj src/StickyNotes.Infrastructure.Sqlite/StickyNotes.Infrastructure.Sqlite.csproj tests/StickyNotes.IntegrationTests/StickyNotes.IntegrationTests.csproj
-dotnet add src/StickyNotes.Application/StickyNotes.Application.csproj reference src/StickyNotes.Domain/StickyNotes.Domain.csproj
-dotnet add src/StickyNotes.Infrastructure.Sqlite/StickyNotes.Infrastructure.Sqlite.csproj reference src/StickyNotes.Domain/StickyNotes.Domain.csproj src/StickyNotes.Application/StickyNotes.Application.csproj
-dotnet add tests/StickyNotes.IntegrationTests/StickyNotes.IntegrationTests.csproj reference src/StickyNotes.Domain/StickyNotes.Domain.csproj src/StickyNotes.Application/StickyNotes.Application.csproj src/StickyNotes.Infrastructure.Sqlite/StickyNotes.Infrastructure.Sqlite.csproj
-dotnet add src/StickyNotes.Infrastructure.Sqlite/StickyNotes.Infrastructure.Sqlite.csproj package Microsoft.Data.Sqlite --version 10.0.0
-dotnet add tests/StickyNotes.IntegrationTests/StickyNotes.IntegrationTests.csproj package Microsoft.NET.Test.Sdk --version 17.13.0
-dotnet add tests/StickyNotes.IntegrationTests/StickyNotes.IntegrationTests.csproj package xunit --version 2.9.3
-dotnet add tests/StickyNotes.IntegrationTests/StickyNotes.IntegrationTests.csproj package xunit.runner.visualstudio --version 2.8.2
+dotnet new classlib -n QuickNotes.Domain -o src/QuickNotes.Domain -f net10.0
+dotnet new classlib -n QuickNotes.Application -o src/QuickNotes.Application -f net10.0
+dotnet new classlib -n QuickNotes.Infrastructure.Sqlite -o src/QuickNotes.Infrastructure.Sqlite -f net10.0
+dotnet new xunit -n QuickNotes.IntegrationTests -o tests/QuickNotes.IntegrationTests -f net10.0
+dotnet sln QuickNotes.DataPrototype.sln add src/QuickNotes.Domain/QuickNotes.Domain.csproj src/QuickNotes.Application/QuickNotes.Application.csproj src/QuickNotes.Infrastructure.Sqlite/QuickNotes.Infrastructure.Sqlite.csproj tests/QuickNotes.IntegrationTests/QuickNotes.IntegrationTests.csproj
+dotnet add src/QuickNotes.Application/QuickNotes.Application.csproj reference src/QuickNotes.Domain/QuickNotes.Domain.csproj
+dotnet add src/QuickNotes.Infrastructure.Sqlite/QuickNotes.Infrastructure.Sqlite.csproj reference src/QuickNotes.Domain/QuickNotes.Domain.csproj src/QuickNotes.Application/QuickNotes.Application.csproj
+dotnet add tests/QuickNotes.IntegrationTests/QuickNotes.IntegrationTests.csproj reference src/QuickNotes.Domain/QuickNotes.Domain.csproj src/QuickNotes.Application/QuickNotes.Application.csproj src/QuickNotes.Infrastructure.Sqlite/QuickNotes.Infrastructure.Sqlite.csproj
+dotnet add src/QuickNotes.Infrastructure.Sqlite/QuickNotes.Infrastructure.Sqlite.csproj package Microsoft.Data.Sqlite --version 10.0.0
+dotnet add tests/QuickNotes.IntegrationTests/QuickNotes.IntegrationTests.csproj package Microsoft.NET.Test.Sdk --version 17.13.0
+dotnet add tests/QuickNotes.IntegrationTests/QuickNotes.IntegrationTests.csproj package xunit --version 2.9.3
+dotnet add tests/QuickNotes.IntegrationTests/QuickNotes.IntegrationTests.csproj package xunit.runner.visualstudio --version 2.8.2
 ```
 
 Remove only scaffold-generated `Class1.cs` and `UnitTest1.cs` files. Set `<Nullable>enable</Nullable>` and `<ImplicitUsings>enable</ImplicitUsings>` in all four project files; set `<IsPackable>false</IsPackable>` in the test project.
@@ -80,7 +80,7 @@ Remove only scaffold-generated `Class1.cs` and `UnitTest1.cs` files. Set `<Nulla
 Create `TemporaryDatabase.cs`; tests create `SqliteConnectionFactory` themselves so reopen uses a genuinely new connection factory:
 
 ```csharp
-namespace StickyNotes.IntegrationTests;
+namespace QuickNotes.IntegrationTests;
 
 internal sealed class TemporaryDatabase : IDisposable
 {
@@ -107,11 +107,11 @@ Create `SqliteSchemaTests.cs`:
 
 ```csharp
 using Microsoft.Data.Sqlite;
-using StickyNotes.Domain;
-using StickyNotes.Infrastructure.Sqlite;
+using QuickNotes.Domain;
+using QuickNotes.Infrastructure.Sqlite;
 using Xunit;
 
-namespace StickyNotes.IntegrationTests;
+namespace QuickNotes.IntegrationTests;
 
 public sealed class SqliteSchemaTests
 {
@@ -168,7 +168,7 @@ public sealed class SqliteSchemaTests
 
 - [ ] **Step 3: Run the tests and confirm the expected failure**
 
-Run: `dotnet test tests/StickyNotes.IntegrationTests/StickyNotes.IntegrationTests.csproj --filter FullyQualifiedName~SqliteSchemaTests`
+Run: `dotnet test tests/QuickNotes.IntegrationTests/QuickNotes.IntegrationTests.csproj --filter FullyQualifiedName~SqliteSchemaTests`
 
 Expected: FAIL at compilation because `SqliteConnectionFactory`, `SqliteSchema`, and domain types do not exist.
 
@@ -177,19 +177,19 @@ Expected: FAIL at compilation because `SqliteConnectionFactory`, `SqliteSchema`,
 Use these exact enums and records:
 
 ```csharp
-namespace StickyNotes.Domain;
+namespace QuickNotes.Domain;
 
 public enum NoteLifecycle { Active = 0, Archived = 1, Trash = 2 }
 ```
 
 ```csharp
-namespace StickyNotes.Domain;
+namespace QuickNotes.Domain;
 
 public enum NoteDisplayIntent { Hidden = 0, Visible = 1 }
 ```
 
 ```csharp
-namespace StickyNotes.Domain;
+namespace QuickNotes.Domain;
 
 public sealed record Note
 {
@@ -207,7 +207,7 @@ public sealed record Note
 ```
 
 ```csharp
-namespace StickyNotes.Domain;
+namespace QuickNotes.Domain;
 
 public sealed record Category
 {
@@ -220,7 +220,7 @@ public sealed record Category
 ```
 
 ```csharp
-namespace StickyNotes.Domain;
+namespace QuickNotes.Domain;
 
 public sealed record Tag
 {
@@ -230,7 +230,7 @@ public sealed record Tag
 ```
 
 ```csharp
-namespace StickyNotes.Domain;
+namespace QuickNotes.Domain;
 
 public sealed record NoteTag
 {
@@ -286,7 +286,7 @@ Use invariant `"O"` formatting for later timestamp reads/writes; schema stores t
 
 - [ ] **Step 6: Run schema tests and verify they pass**
 
-Run: `dotnet test tests/StickyNotes.IntegrationTests/StickyNotes.IntegrationTests.csproj --filter FullyQualifiedName~SqliteSchemaTests`
+Run: `dotnet test tests/QuickNotes.IntegrationTests/QuickNotes.IntegrationTests.csproj --filter FullyQualifiedName~SqliteSchemaTests`
 
 Expected: PASS, 2 tests; no integrity or foreign-key failures.
 
@@ -295,13 +295,13 @@ Expected: PASS, 2 tests; no integrity or foreign-key failures.
 ### Task 2: Transactional Catalog and Note Creation/Reading
 
 **Files:**
-- Create: `src/StickyNotes.Application/ICatalogRepository.cs`
-- Create: `src/StickyNotes.Application/INoteRepository.cs`
-- Create: `src/StickyNotes.Application/NoteConcurrencyException.cs`
-- Create: `src/StickyNotes.Infrastructure.Sqlite/SqliteCatalogRepository.cs`
-- Create: `src/StickyNotes.Infrastructure.Sqlite/SqliteNoteRepository.cs`
-- Create: `src/StickyNotes.Infrastructure.Sqlite/SqliteTypeMapping.cs`
-- Test: `tests/StickyNotes.IntegrationTests/SqliteNoteRepositoryTests.cs`
+- Create: `src/QuickNotes.Application/ICatalogRepository.cs`
+- Create: `src/QuickNotes.Application/INoteRepository.cs`
+- Create: `src/QuickNotes.Application/NoteConcurrencyException.cs`
+- Create: `src/QuickNotes.Infrastructure.Sqlite/SqliteCatalogRepository.cs`
+- Create: `src/QuickNotes.Infrastructure.Sqlite/SqliteNoteRepository.cs`
+- Create: `src/QuickNotes.Infrastructure.Sqlite/SqliteTypeMapping.cs`
+- Test: `tests/QuickNotes.IntegrationTests/SqliteNoteRepositoryTests.cs`
 
 **Interfaces:**
 - Consumes: Task 1 domain types, factory, initialized schema.
@@ -312,10 +312,10 @@ Expected: PASS, 2 tests; no integrity or foreign-key failures.
 Create `TestDatabase.cs` and `TestData.cs`:
 
 ```csharp
-using StickyNotes.Application;
-using StickyNotes.Infrastructure.Sqlite;
+using QuickNotes.Application;
+using QuickNotes.Infrastructure.Sqlite;
 
-namespace StickyNotes.IntegrationTests;
+namespace QuickNotes.IntegrationTests;
 
 internal sealed class TestDatabase : IDisposable
 {
@@ -347,9 +347,9 @@ internal sealed class TestDatabase : IDisposable
 ```
 
 ```csharp
-using StickyNotes.Domain;
+using QuickNotes.Domain;
 
-namespace StickyNotes.IntegrationTests;
+namespace QuickNotes.IntegrationTests;
 
 internal static class TestData
 {
@@ -369,7 +369,7 @@ internal static class TestData
 }
 ```
 
-Add these tests to `SqliteNoteRepositoryTests.cs` with `Microsoft.Data.Sqlite`, `StickyNotes.Domain`, and `Xunit` imported:
+Add these tests to `SqliteNoteRepositoryTests.cs` with `Microsoft.Data.Sqlite`, `QuickNotes.Domain`, and `Xunit` imported:
 
 ```csharp
 [Fact]
@@ -417,16 +417,16 @@ public async Task ForeignKeys_RejectNoteWithMissingCategory()
 
 - [ ] **Step 2: Run the tests and confirm the expected failure**
 
-Run: `dotnet test tests/StickyNotes.IntegrationTests/StickyNotes.IntegrationTests.csproj --filter FullyQualifiedName~SqliteNoteRepositoryTests`
+Run: `dotnet test tests/QuickNotes.IntegrationTests/QuickNotes.IntegrationTests.csproj --filter FullyQualifiedName~SqliteNoteRepositoryTests`
 
 Expected: FAIL at compilation because repository contracts and implementations do not exist.
 
 - [ ] **Step 3: Define application contracts and conflict semantics**
 
 ```csharp
-using StickyNotes.Domain;
+using QuickNotes.Domain;
 
-namespace StickyNotes.Application;
+namespace QuickNotes.Application;
 
 public interface ICatalogRepository
 {
@@ -438,9 +438,9 @@ public interface ICatalogRepository
 ```
 
 ```csharp
-using StickyNotes.Domain;
+using QuickNotes.Domain;
 
-namespace StickyNotes.Application;
+namespace QuickNotes.Application;
 
 public interface INoteRepository
 {
@@ -474,7 +474,7 @@ id, title, body, created_at_utc, modified_at_utc, version, lifecycle, category_i
 
 - [ ] **Step 6: Run create/read tests and verify they pass**
 
-Run: `dotnet test tests/StickyNotes.IntegrationTests/StickyNotes.IntegrationTests.csproj --filter "FullyQualifiedName~SqliteNoteRepositoryTests.CreateAndGet|FullyQualifiedName~SqliteNoteRepositoryTests.CloseAndReopen|FullyQualifiedName~SqliteNoteRepositoryTests.ForeignKeys"`
+Run: `dotnet test tests/QuickNotes.IntegrationTests/QuickNotes.IntegrationTests.csproj --filter "FullyQualifiedName~SqliteNoteRepositoryTests.CreateAndGet|FullyQualifiedName~SqliteNoteRepositoryTests.CloseAndReopen|FullyQualifiedName~SqliteNoteRepositoryTests.ForeignKeys"`
 
 Expected: PASS, 3 tests; reopening returns identical content and tag associations.
 
@@ -483,8 +483,8 @@ Expected: PASS, 3 tests; reopening returns identical content and tag association
 ### Task 3: Atomic Updates, Lifecycle Changes, Rollback, and Conflict Protection
 
 **Files:**
-- Modify: `src/StickyNotes.Infrastructure.Sqlite/SqliteNoteRepository.cs`
-- Test: `tests/StickyNotes.IntegrationTests/SqliteNoteRepositoryTests.cs`
+- Modify: `src/QuickNotes.Infrastructure.Sqlite/SqliteNoteRepository.cs`
+- Test: `tests/QuickNotes.IntegrationTests/SqliteNoteRepositoryTests.cs`
 
 **Interfaces:**
 - Consumes: all Task 2 repository methods and `NoteConcurrencyException`.
@@ -577,7 +577,7 @@ public async Task Update_HiddenActiveNote_DoesNotChangeLifecycle()
 
 - [ ] **Step 2: Run the tests and confirm update methods fail**
 
-Run: `dotnet test tests/StickyNotes.IntegrationTests/StickyNotes.IntegrationTests.csproj --filter FullyQualifiedName~SqliteNoteRepositoryTests`
+Run: `dotnet test tests/QuickNotes.IntegrationTests/QuickNotes.IntegrationTests.csproj --filter FullyQualifiedName~SqliteNoteRepositoryTests`
 
 Expected: the new tests FAIL because update methods are not implemented; prior create/read tests remain PASS.
 

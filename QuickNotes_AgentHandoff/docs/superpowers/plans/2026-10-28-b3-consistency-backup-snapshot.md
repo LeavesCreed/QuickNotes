@@ -86,8 +86,8 @@ Infrastructure.Backup
 
 新增项目：
 
-- `src/StickyNotes.Infrastructure.Backup/StickyNotes.Infrastructure.Backup.csproj`（`net10.0`；引用 Application、Domain）
-- 更新 `QuickNotes.DataPrototype.sln`；`StickyNotes.UnitTests` 与 `StickyNotes.IntegrationTests` 引用 Backup 项目
+- `src/QuickNotes.Infrastructure.Backup/QuickNotes.Infrastructure.Backup.csproj`（`net10.0`；引用 Application、Domain）
+- 更新 `QuickNotes.DataPrototype.sln`；`QuickNotes.UnitTests` 与 `QuickNotes.IntegrationTests` 引用 Backup 项目
 
 不修改 B1/B2 schema、`user_version`、WPF 原型。
 
@@ -320,7 +320,7 @@ dotnet list QuickNotes_AgentHandoff/QuickNotes.DataPrototype.sln package --vulne
 
 ### Task 1：Application 备份契约与 manifest 模型
 
-**文件**：`src/StickyNotes.Application/Backup*.cs`、`IBackupSnapshotProvider.cs`、`IBackupPackageStore.cs`、`IBackupCoordinator.cs`
+**文件**：`src/QuickNotes.Application/Backup*.cs`、`IBackupSnapshotProvider.cs`、`IBackupPackageStore.cs`、`IBackupCoordinator.cs`
 
 - 先写 manifest/请求/结果校验测试（UnitTests，编译失败为红）。
 - 实现记录与枚举、稳定错误码、`BackupException`。
@@ -328,7 +328,7 @@ dotnet list QuickNotes_AgentHandoff/QuickNotes.DataPrototype.sln package --vulne
 
 ### Task 2：SQLite 一致性快照提供者
 
-**文件**：`src/StickyNotes.Infrastructure.Sqlite/SqliteSnapshotProvider.cs`、集成测试
+**文件**：`src/QuickNotes.Infrastructure.Sqlite/SqliteSnapshotProvider.cs`、集成测试
 
 - 先写真实数据库快照测试：内容/关联/schema/integrity/foreign_key。
 - 实现 `BackupDatabase` → 临时独立 `.db`；关闭目标连接；验证；失败删除临时文件。
@@ -337,7 +337,7 @@ dotnet list QuickNotes_AgentHandoff/QuickNotes.DataPrototype.sln package --vulne
 
 ### Task 3：ZIP 包存储、manifest、哈希与原子发布
 
-**文件**：`src/StickyNotes.Infrastructure.Backup/*`、集成测试
+**文件**：`src/QuickNotes.Infrastructure.Backup/*`、集成测试
 
 - 先写包格式失败测试：额外条目、重复条目、路径穿越、哈希不符、截断 ZIP、目标存在。
 - 实现 manifest 严格序列化、SHA-256、临时 ZIP、重新打开校验、原子 `File.Move`、临时清理。
@@ -346,7 +346,7 @@ dotnet list QuickNotes_AgentHandoff/QuickNotes.DataPrototype.sln package --vulne
 
 ### Task 4：备份协调器与失败语义
 
-**文件**：`src/StickyNotes.Application/BackupCoordinator.cs`、单元测试
+**文件**：`src/QuickNotes.Application/BackupCoordinator.cs`、单元测试
 
 - 先写替身测试：成功、快照失败、包写入失败、校验失败、取消、非预期异常、临时清理顺序。
 - 实现结果映射、日志、临时工作目录生命周期。
@@ -393,6 +393,6 @@ dotnet list QuickNotes_AgentHandoff/QuickNotes.DataPrototype.sln package --vulne
 - [ ] D8 manifest 同时记录 UTC 与本地时间
 - [ ] D9 B3 仅 Manual 类型
 - [ ] D10 B3 只备份数据库，不含草稿/设置
-- [ ] 是否接受新增 `StickyNotes.Infrastructure.Backup` 项目
+- [ ] 是否接受新增 `QuickNotes.Infrastructure.Backup` 项目
 
 确认以上决策后，可将本计划转为正式实施任务并开始 Task 1。
