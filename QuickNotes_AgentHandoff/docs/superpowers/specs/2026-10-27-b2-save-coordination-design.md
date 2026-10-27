@@ -66,10 +66,10 @@ FileNoteDraftStore（Infrastructure.Drafts）
 
 新增项目：
 
-- `src/StickyNotes.Infrastructure.Drafts/StickyNotes.Infrastructure.Drafts.csproj`（`net10.0`；引用 Application、Domain）
-- `tests/StickyNotes.UnitTests/StickyNotes.UnitTests.csproj`（`net10.0`；引用 Application、Domain；测试包版本与 IntegrationTests 一致：xUnit 2.9.3、Microsoft.NET.Test.Sdk 17.13.0、xunit.runner.visualstudio 2.8.2、coverlet.collector 6.0.4）
-- 更新 `QuickNotes.DataPrototype.sln`，加入两个项目，并让 `StickyNotes.IntegrationTests` 引用 `StickyNotes.Infrastructure.Drafts`
-- `StickyNotes.Application` 增加 `Microsoft.Extensions.Logging.Abstractions` 10.0.0
+- `src/QuickNotes.Infrastructure.Drafts/QuickNotes.Infrastructure.Drafts.csproj`（`net10.0`；引用 Application、Domain）
+- `tests/QuickNotes.UnitTests/QuickNotes.UnitTests.csproj`（`net10.0`；引用 Application、Domain；测试包版本与 IntegrationTests 一致：xUnit 2.9.3、Microsoft.NET.Test.Sdk 17.13.0、xunit.runner.visualstudio 2.8.2、coverlet.collector 6.0.4）
+- 更新 `QuickNotes.DataPrototype.sln`，加入两个项目，并让 `QuickNotes.IntegrationTests` 引用 `QuickNotes.Infrastructure.Drafts`
+- `QuickNotes.Application` 增加 `Microsoft.Extensions.Logging.Abstractions` 10.0.0
 
 不修改 B1 的 schema、表结构或 `user_version`。
 
@@ -249,7 +249,7 @@ public sealed class SaveOutcomeUnknownException : NoteStorageException
 
 ## 5. 错误翻译
 
-`SqliteErrorTranslator`（`StickyNotes.Infrastructure.Sqlite` 内部）把 `SqliteException` 按主错误码和扩展错误码翻译：
+`SqliteErrorTranslator`（`QuickNotes.Infrastructure.Sqlite` 内部）把 `SqliteException` 按主错误码和扩展错误码翻译：
 
 | SQLite 错误 | 结果异常 | 可重试 |
 |---|---|---|
@@ -380,7 +380,7 @@ public sealed record SaveRetryOptions
 
 ### 9.1 契约
 
-`INoteDraftStore`、`NoteDraft`、`DraftStoreException` 位于 `StickyNotes.Application`：
+`INoteDraftStore`、`NoteDraft`、`DraftStoreException` 位于 `QuickNotes.Application`：
 
 ```csharp
 public interface INoteDraftStore
@@ -454,7 +454,7 @@ public sealed class DraftStoreException : Exception
 
 ### 9.3 文件存储
 
-`FileNoteDraftStore`（`StickyNotes.Infrastructure.Drafts`）：
+`FileNoteDraftStore`（`QuickNotes.Infrastructure.Drafts`）：
 
 - 构造函数接收草稿目录路径（非空字符串）；目录不存在时由 `SaveAsync` 创建。
 - 每个草稿一个 JSON 文件：`<draftId:D>.json`；文件名不含标题/正文，不接受用户自定义路径。
@@ -481,7 +481,7 @@ public sealed class DraftStoreException : Exception
 
 ## 11. 测试策略
 
-### 11.1 Application 单元测试（`StickyNotes.UnitTests`）
+### 11.1 Application 单元测试（`QuickNotes.UnitTests`）
 
 替身 `INoteRepository` / `INoteDraftStore`，重试延迟设为 0：
 
@@ -507,7 +507,7 @@ public sealed class DraftStoreException : Exception
 - 非预期异常 → 原样抛出，不被映射为 `StorageUnavailable`。
 - 日志捕获：不包含标题/正文/标签内容。
 
-### 11.2 SQLite 集成测试（`StickyNotes.IntegrationTests`，临时库）
+### 11.2 SQLite 集成测试（`QuickNotes.IntegrationTests`，临时库）
 
 - 连接 `PRAGMA busy_timeout` 等于配置值；默认 250ms。
 - 缺失分类 → 仓储抛 `NoteConstraintException`（更新 B1 原 `SqliteException` 断言）；经协调器 → `ValidationFailed`。
@@ -522,7 +522,7 @@ public sealed class DraftStoreException : Exception
 - 真实 Create/Update 成功后，匹配草稿文件被删除；不匹配草稿保留。
 - 生命周期操作成功不删除草稿文件。
 
-### 11.3 草稿文件集成测试（`StickyNotes.IntegrationTests`，临时目录）
+### 11.3 草稿文件集成测试（`QuickNotes.IntegrationTests`，临时目录）
 
 - 保存/读取/按便签列出/删除往返；覆盖 null 标题、空正文、多标签、非 UTC 偏移时间。
 - 覆盖已有草稿的原子替换；替换后无临时文件残留。

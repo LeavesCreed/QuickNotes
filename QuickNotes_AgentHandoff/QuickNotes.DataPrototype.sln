@@ -5,19 +5,19 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{827E0CD3-B72D-47B6-A68D-7590B98EB39B}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StickyNotes.Domain", "src\StickyNotes.Domain\StickyNotes.Domain.csproj", "{A9B7D9FF-C431-4432-A28A-3CB791CDAD25}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QuickNotes.Domain", "src\QuickNotes.Domain\QuickNotes.Domain.csproj", "{A9B7D9FF-C431-4432-A28A-3CB791CDAD25}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StickyNotes.Application", "src\StickyNotes.Application\StickyNotes.Application.csproj", "{FCB219CC-65BA-4552-A22E-B5BE28F8FA3C}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QuickNotes.Application", "src\QuickNotes.Application\QuickNotes.Application.csproj", "{FCB219CC-65BA-4552-A22E-B5BE28F8FA3C}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StickyNotes.Infrastructure.Sqlite", "src\StickyNotes.Infrastructure.Sqlite\StickyNotes.Infrastructure.Sqlite.csproj", "{C6F6C510-DBDA-4C9B-8BFA-9E53250513EA}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QuickNotes.Infrastructure.Sqlite", "src\QuickNotes.Infrastructure.Sqlite\QuickNotes.Infrastructure.Sqlite.csproj", "{C6F6C510-DBDA-4C9B-8BFA-9E53250513EA}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{0AB3BF05-4346-4AA6-1389-037BE0695223}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StickyNotes.IntegrationTests", "tests\StickyNotes.IntegrationTests\StickyNotes.IntegrationTests.csproj", "{3F5930A2-B2E6-4546-A1A1-831A3EB3A27D}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QuickNotes.IntegrationTests", "tests\QuickNotes.IntegrationTests\QuickNotes.IntegrationTests.csproj", "{3F5930A2-B2E6-4546-A1A1-831A3EB3A27D}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StickyNotes.Infrastructure.Drafts", "src\StickyNotes.Infrastructure.Drafts\StickyNotes.Infrastructure.Drafts.csproj", "{9A79A31D-4D48-44D9-A0DE-C0371204C7DC}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QuickNotes.Infrastructure.Drafts", "src\QuickNotes.Infrastructure.Drafts\QuickNotes.Infrastructure.Drafts.csproj", "{9A79A31D-4D48-44D9-A0DE-C0371204C7DC}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StickyNotes.UnitTests", "tests\StickyNotes.UnitTests\StickyNotes.UnitTests.csproj", "{C7773591-6D14-4E05-BA28-0059F23A7451}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QuickNotes.UnitTests", "tests\QuickNotes.UnitTests\QuickNotes.UnitTests.csproj", "{C7773591-6D14-4E05-BA28-0059F23A7451}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
