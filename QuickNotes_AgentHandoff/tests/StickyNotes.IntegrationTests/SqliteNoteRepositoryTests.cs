@@ -1,4 +1,3 @@
-using Microsoft.Data.Sqlite;
 using StickyNotes.Application;
 using StickyNotes.Domain;
 using Xunit;
@@ -45,7 +44,12 @@ public sealed class SqliteNoteRepositoryTests
         using var database = await TestDatabase.CreateAsync();
         var note = TestData.NewNote() with { CategoryId = Guid.NewGuid() };
 
-        await Assert.ThrowsAsync<SqliteException>(() => database.Notes.CreateAsync(note, Array.Empty<Guid>()));
+        var exception = await Assert.ThrowsAsync<NoteConstraintException>(
+            () => database.Notes.CreateAsync(note, Array.Empty<Guid>()));
+
+        Assert.Equal("foreign_key", exception.ConstraintKind);
+        Assert.Equal("create", exception.Operation);
+        Assert.Equal(note.Id, exception.NoteId);
         Assert.Null(await database.Notes.GetAsync(note.Id));
     }
 
@@ -86,9 +90,12 @@ public sealed class SqliteNoteRepositoryTests
             1,
             Array.Empty<Guid>());
 
-        await Assert.ThrowsAsync<NoteConcurrencyException>(
+        var exception = await Assert.ThrowsAsync<NoteConcurrencyException>(
             () => database.Notes.UpdateAsync(note with { Body = "stale" }, 1, Array.Empty<Guid>()));
 
+        Assert.Equal(1, exception.ExpectedVersion);
+        Assert.Equal(2, exception.ActualVersion);
+        Assert.Equal("update", exception.Operation);
         var loaded = await database.Notes.GetAsync(note.Id);
         Assert.Equal("newer", loaded!.Body);
         Assert.Equal(2, loaded.Version);
@@ -103,12 +110,14 @@ public sealed class SqliteNoteRepositoryTests
         var note = TestData.NewNote();
         await database.Notes.CreateAsync(note, new[] { originalTag.Id });
 
-        await Assert.ThrowsAsync<SqliteException>(
+        var exception = await Assert.ThrowsAsync<NoteConstraintException>(
             () => database.Notes.UpdateAsync(
                 note with { Body = "must roll back", ModifiedAtUtc = note.ModifiedAtUtc.AddSeconds(1) },
                 1,
                 new[] { Guid.NewGuid() }));
 
+        Assert.Equal("foreign_key", exception.ConstraintKind);
+        Assert.Equal("update", exception.Operation);
         Assert.Equal(note, await database.Notes.GetAsync(note.Id));
         Assert.Equal(new[] { originalTag.Id }, await database.Notes.GetTagIdsAsync(note.Id));
     }

@@ -13,17 +13,17 @@ internal sealed class TestDatabase : IDisposable
     public ICatalogRepository Catalog { get; private set; } = null!;
     public INoteRepository Notes { get; private set; } = null!;
 
-    public static async Task<TestDatabase> CreateAsync()
+    public static async Task<TestDatabase> CreateAsync(int busyTimeoutMilliseconds = 250)
     {
         var database = new TestDatabase();
-        database.Reopen();
+        database.Reopen(busyTimeoutMilliseconds);
         await new SqliteSchema(database.Factory).InitializeAsync();
         return database;
     }
 
-    public void Reopen()
+    public void Reopen(int busyTimeoutMilliseconds = 250)
     {
-        Factory = new SqliteConnectionFactory(_temporary.DatabasePath);
+        Factory = new SqliteConnectionFactory(_temporary.DatabasePath, busyTimeoutMilliseconds);
         Catalog = new SqliteCatalogRepository(Factory);
         Notes = new SqliteNoteRepository(Factory);
     }
