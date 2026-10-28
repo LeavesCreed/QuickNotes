@@ -423,6 +423,11 @@ internal sealed class SignalingNoteRepository : INoteRepository
     public Task<Note?> GetAsync(Guid id, CancellationToken cancellationToken = default) =>
         _inner.GetAsync(id, cancellationToken);
 
+    public Task<IReadOnlyList<Note>> ListAsync(
+        NoteLifecycle lifecycle,
+        CancellationToken cancellationToken = default) =>
+        _inner.ListAsync(lifecycle, cancellationToken);
+
     public Task<IReadOnlyList<Guid>> GetTagIdsAsync(Guid id, CancellationToken cancellationToken = default) =>
         _inner.GetTagIdsAsync(id, cancellationToken);
 
@@ -468,6 +473,11 @@ internal sealed class CommitUnknownNoteRepository : INoteRepository
 
     public Task<Note?> GetAsync(Guid id, CancellationToken cancellationToken = default) =>
         _inner.GetAsync(id, cancellationToken);
+
+    public Task<IReadOnlyList<Note>> ListAsync(
+        NoteLifecycle lifecycle,
+        CancellationToken cancellationToken = default) =>
+        _inner.ListAsync(lifecycle, cancellationToken);
 
     public Task<IReadOnlyList<Guid>> GetTagIdsAsync(Guid id, CancellationToken cancellationToken = default) =>
         _inner.GetTagIdsAsync(id, cancellationToken);

@@ -105,6 +105,37 @@ public sealed class SqliteNoteRepository : INoteRepository
         }
     }
 
+    public async Task<IReadOnlyList<Note>> ListAsync(
+        NoteLifecycle lifecycle,
+        CancellationToken cancellationToken = default)
+    {
+        const string operation = "list";
+        try
+        {
+            await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"""
+                SELECT {NoteColumns}
+                FROM notes
+                WHERE lifecycle = $lifecycle
+                ORDER BY modified_at_utc DESC, id;
+                """;
+            command.Parameters.AddWithValue("$lifecycle", (int)lifecycle);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            var notes = new List<Note>();
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                notes.Add(SqliteTypeMapping.ReadNote(reader));
+            }
+
+            return notes.AsReadOnly();
+        }
+        catch (SqliteException exception)
+        {
+            throw SqliteErrorTranslator.Translate(exception, operation, noteId: null, cancellationToken);
+        }
+    }
+
     public async Task<IReadOnlyList<Guid>> GetTagIdsAsync(Guid id, CancellationToken cancellationToken = default)
     {
         const string operation = "get_tags";

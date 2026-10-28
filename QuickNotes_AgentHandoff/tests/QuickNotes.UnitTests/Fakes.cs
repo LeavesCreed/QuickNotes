@@ -28,6 +28,9 @@ internal sealed class FakeNoteRepository : INoteRepository
     public Func<Guid, CancellationToken, Task<Note?>> GetHandler { get; set; } =
         static (_, _) => Task.FromResult<Note?>(null);
 
+    public Func<NoteLifecycle, CancellationToken, Task<IReadOnlyList<Note>>> ListHandler { get; set; } =
+        static (_, _) => Task.FromResult<IReadOnlyList<Note>>(Array.Empty<Note>());
+
     public Func<Guid, CancellationToken, Task<IReadOnlyList<Guid>>> GetTagIdsHandler { get; set; } =
         static (_, _) => Task.FromResult<IReadOnlyList<Guid>>(Array.Empty<Guid>());
 
@@ -35,6 +38,7 @@ internal sealed class FakeNoteRepository : INoteRepository
     public int UpdateCalls { get; private set; }
     public int SetLifecycleCalls { get; private set; }
     public int GetCalls { get; private set; }
+    public int ListCalls { get; private set; }
     public int GetTagIdsCalls { get; private set; }
     public Note? LastCreatedNote { get; private set; }
     public IReadOnlyCollection<Guid>? LastCreateTagIds { get; private set; }
@@ -54,6 +58,14 @@ internal sealed class FakeNoteRepository : INoteRepository
     {
         GetCalls++;
         return GetHandler(id, cancellationToken);
+    }
+
+    public Task<IReadOnlyList<Note>> ListAsync(
+        NoteLifecycle lifecycle,
+        CancellationToken cancellationToken = default)
+    {
+        ListCalls++;
+        return ListHandler(lifecycle, cancellationToken);
     }
 
     public Task<IReadOnlyList<Guid>> GetTagIdsAsync(Guid id, CancellationToken cancellationToken = default)

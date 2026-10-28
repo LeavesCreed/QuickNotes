@@ -54,6 +54,59 @@ public sealed class SqliteNoteRepositoryTests
     }
 
     [Fact]
+    public async Task List_FiltersLifecycleAndOrdersByModifiedDesc()
+    {
+        using var database = await TestDatabase.CreateAsync();
+        var first = TestData.NewNote();
+        var second = TestData.NewNote() with
+        {
+            ModifiedAtUtc = first.ModifiedAtUtc.AddMinutes(1)
+        };
+        await database.Notes.CreateAsync(first, Array.Empty<Guid>());
+        await database.Notes.CreateAsync(second, Array.Empty<Guid>());
+
+        var active = await database.Notes.ListAsync(NoteLifecycle.Active);
+
+        Assert.Equal(new[] { second.Id, first.Id }, active.Select(note => note.Id));
+    }
+
+    [Fact]
+    public async Task List_EmptyDatabase_ReturnsEmpty()
+    {
+        using var database = await TestDatabase.CreateAsync();
+
+        var active = await database.Notes.ListAsync(NoteLifecycle.Active);
+
+        Assert.Empty(active);
+    }
+
+    [Fact]
+    public async Task List_DoesNotReturnArchivedOrTrash()
+    {
+        using var database = await TestDatabase.CreateAsync();
+        var active = TestData.NewNote();
+        var archived = TestData.NewNote();
+        var trashed = TestData.NewNote();
+        await database.Notes.CreateAsync(active, Array.Empty<Guid>());
+        await database.Notes.CreateAsync(archived, Array.Empty<Guid>());
+        await database.Notes.CreateAsync(trashed, Array.Empty<Guid>());
+        await database.Notes.SetLifecycleAsync(
+            archived.Id,
+            NoteLifecycle.Archived,
+            1,
+            archived.ModifiedAtUtc.AddMinutes(1));
+        await database.Notes.SetLifecycleAsync(
+            trashed.Id,
+            NoteLifecycle.Trash,
+            1,
+            trashed.ModifiedAtUtc.AddMinutes(2));
+
+        var result = await database.Notes.ListAsync(NoteLifecycle.Active);
+
+        Assert.Equal(new[] { active.Id }, result.Select(note => note.Id));
+    }
+
+    [Fact]
     public async Task Update_ChangesMutableFieldsAndIncrementsVersion()
     {
         using var database = await TestDatabase.CreateAsync();
