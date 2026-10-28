@@ -8,6 +8,7 @@ namespace QuickNotes.Infrastructure.Sqlite;
 public sealed class SqliteChangeDetector : IBackupChangeDetector
 {
     private const int BusyTimeoutMilliseconds = 250;
+    private const string ChangeMarkerUnavailable = "change_marker_unavailable";
 
     private readonly string _sourceDatabasePath;
 
@@ -54,59 +55,9 @@ public sealed class SqliteChangeDetector : IBackupChangeDetector
             await using var transaction = connection.BeginTransaction(
                 IsolationLevel.Serializable,
                 deferred: true);
-            var schemaVersion = await ScalarLongAsync(
-                connection,
-                transaction,
-                "PRAGMA user_version;",
-                cancellationToken);
-            var maximumModified = await ScalarStringAsync(
-                connection,
-                transaction,
-                "SELECT COALESCE(MAX(modified_at_utc), '') FROM notes;",
-                cancellationToken);
-            var noteCount = await ScalarLongAsync(
-                connection,
-                transaction,
-                "SELECT COUNT(*) FROM notes;",
-                cancellationToken);
-            var tagCount = await ScalarLongAsync(
-                connection,
-                transaction,
-                "SELECT COUNT(*) FROM tags;",
-                cancellationToken);
-            var noteTagCount = await ScalarLongAsync(
-                connection,
-                transaction,
-                "SELECT COUNT(*) FROM note_tags;",
-                cancellationToken);
-            var categoryCount = await ScalarLongAsync(
-                connection,
-                transaction,
-                "SELECT COUNT(*) FROM categories;",
-                cancellationToken);
-            var tagNameLengths = await ScalarLongAsync(
-                connection,
-                transaction,
-                "SELECT COALESCE(SUM(LENGTH(name)), 0) FROM tags;",
-                cancellationToken);
-            var categoryNameLengths = await ScalarLongAsync(
-                connection,
-                transaction,
-                "SELECT COALESCE(SUM(LENGTH(name)), 0) FROM categories;",
-                cancellationToken);
+            var marker = await ReadMarkerAsync(connection, transaction, cancellationToken);
             await transaction.CommitAsync(CancellationToken.None);
-
-            return string.Format(
-                CultureInfo.InvariantCulture,
-                "schema={0};notes={1};tags={2};note_tags={3};categories={4};tag_name_lengths={5};category_name_lengths={6};modified={7}",
-                schemaVersion,
-                noteCount,
-                tagCount,
-                noteTagCount,
-                categoryCount,
-                tagNameLengths,
-                categoryNameLengths,
-                maximumModified);
+            return marker.ToFingerprint();
         }
         catch (OperationCanceledException)
         {
@@ -123,6 +74,51 @@ public sealed class SqliteChangeDetector : IBackupChangeDetector
         }
     }
 
+    private static async Task<DataChangeMarker> ReadMarkerAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        var schemaVersion = await ScalarLongAsync(
+            connection,
+            transaction,
+            "PRAGMA user_version;",
+            cancellationToken);
+        var metaTableCount = await ScalarLongAsync(
+            connection,
+            transaction,
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'database_meta';",
+            cancellationToken);
+        if (metaTableCount == 0)
+        {
+            throw ChangeMarkerMissing();
+        }
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT database_id, change_sequence
+            FROM database_meta
+            WHERE id = 1;
+            """;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            throw ChangeMarkerMissing();
+        }
+
+        if (!Guid.TryParse(reader.GetString(0), out var databaseId))
+        {
+            throw ChangeMarkerMissing("database_meta contains an invalid database_id.");
+        }
+
+        return new DataChangeMarker(schemaVersion, databaseId, reader.GetInt64(1));
+    }
+
+    private static BackupException ChangeMarkerMissing(
+        string message = "database_meta is missing.") =>
+        new("change_detection", ChangeMarkerUnavailable, message);
+
     private static async Task<long> ScalarLongAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
@@ -135,20 +131,6 @@ public sealed class SqliteChangeDetector : IBackupChangeDetector
         return Convert.ToInt64(
             await command.ExecuteScalarAsync(cancellationToken),
             CultureInfo.InvariantCulture);
-    }
-
-    private static async Task<string> ScalarStringAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        string sql,
-        CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = sql;
-        return Convert.ToString(
-            await command.ExecuteScalarAsync(cancellationToken),
-            CultureInfo.InvariantCulture) ?? string.Empty;
     }
 
     private static bool IsBusy(SqliteException exception)
