@@ -4,10 +4,11 @@ QuickNotes 是面向 Windows 11 x64 的桌面便签软件。本仓库当前是 *
 
 ## 当前状态
 
-- B0–B7 已实现并通过自动化测试；C0 环境/PRD 基线与 C1 桌面宿主/启动安全已实现。
+- B0–B7 已实现并通过自动化测试；C0 环境/PRD 基线、C1 桌面宿主/启动安全、C2 最小编辑闭环已实现。
 - C1 交付可启动的 WPF 启动/诊断宿主：单实例、正式数据目录、启动恢复状态机、恢复产物识别、缺失库/损坏库/阻断恢复的最小入口。
-- 当前仍**没有**便签编辑器、完整设置、备份管理 UI、托盘/快捷键；这些属于 C2–C5。
-- 当前交付物是类库 + WPF 启动诊断宿主 + 自动化测试；测试与诊断宿主是当前可执行入口。
+- C2 交付最小工作区：Active 便签列表、标题/正文编辑、自动保存与 Ctrl+S、保存/草稿状态、冲突/未知结果处理、重启草稿恢复。
+- 当前仍**没有** schema v2、分类/标签/生命周期 UI、备份管理 UI、托盘/全局快捷键、设置页；这些属于 C3–C5。
+- 当前交付物是类库 + WPF 工作区/诊断宿主 + 自动化测试；测试与 WPF 冒烟是当前可执行入口。
 
 ## 环境要求
 
@@ -34,13 +35,18 @@ B7 基线结果：
 
 C1 追加指标（含桌面测试）：测试总计 **313/313**（单元 120 + 集成 125 + 桌面 68），构建 0 警告；详见 [C1 测试报告](docs/agent/C1-测试报告.md)。
 
-## 运行 C1 启动/诊断宿主
+C2 追加指标：测试总计 **353/353**（单元 120 + 集成 128 + 桌面 105），构建 0 警告；WPF 冒烟通过，但 C2 人工检查待用户执行；详见 [C2 测试报告](docs/agent/C2-测试报告.md)。
+
+## 运行桌面宿主
 
 ```powershell
-dotnet run --project QuickNotes_AgentHandoff/src/QuickNotes.Desktop.Wpf/QuickNotes.Desktop.Wpf.csproj -- --data-root "$env:TEMP\QuickNotes-C1-Demo"
+dotnet run --project QuickNotes_AgentHandoff/src/QuickNotes.Desktop.Wpf/QuickNotes.Desktop.Wpf.csproj -- --data-root "$env:TEMP\QuickNotes-C2-Demo"
 ```
 
-- 首次运行会创建 `notes.db`、`application-state.json`、`drafts/`、`logs/`；不提供编辑器。
+- 数据层 Ready 时直接进入最小工作区；首次运行、恢复、阻断或只读诊断时显示启动/诊断窗口。
+- 工作区支持 Active 便签列表、新建、标题/正文编辑、自动保存（停止输入 800ms、最长 5s）、保存按钮/Ctrl+S、焦点离开/切换/关闭前保存。
+- 草稿自动落盘（300ms 去抖），“草稿恢复”窗口可查看、恢复或显式丢弃；恢复不自动提交。
+- 首次运行会创建 `notes.db`、`application-state.json`、`drafts/`、`logs/`。
 - 支持 `--backup-dir <dir>` 仅用于诊断扫描保护快照；缺失库/损坏库/阻断恢复可从窗口选择已验证备份。
 - 第二实例会尝试激活第一实例；同一数据根只允许一个实例。
 - 只使用临时数据根，不要指向真实用户数据。
@@ -52,6 +58,8 @@ dotnet run --project QuickNotes_AgentHandoff/src/QuickNotes.Desktop.Wpf/QuickNot
 | 领域 | 能力 |
 |---|---|
 | 数据模型 | 便签、分类、标签、标签关联；生命周期（正常/归档/回收站）；版本号并发保护；schema v1 |
+| 编辑（C2） | Active 列表；新建/打开/编辑；自动保存与显式保存；真实保存状态；迟到结果不误报；Ctrl+S/焦点离开/切换/关闭前保存 |
+| 草稿（C2） | 去抖自动落盘；草稿状态与失败提示；重启恢复/查看/显式丢弃；不自动提交；损坏草稿保留证据 |
 | 保存 | 事务提交后才报告成功；BUSY/LOCKED 有界重试；提交未知时回读核验；草稿保留 |
 | 备份 | SQLite Online Backup API 一致性快照；ZIP + manifest + SHA-256；临时包校验后原子发布 |
 | 自动备份 | SQL 指纹变更检测；本地日备份；7 日 + 4 周留存；手动备份不自动清理 |
@@ -82,9 +90,10 @@ QuickNotes_AgentHandoff/
 
 - 产品基线：[PRD v1.0](docs/product/PRD_v1.0.md)
 - B 阶段任务与验收：[Agent 对接文档](docs/agent/Agent对接文档_B阶段.md)
-- 阶段完成总结：[B1](docs/agent/B1-完成总结.md)、[B2](docs/agent/B2-完成总结.md)、[B3](docs/agent/B3-完成总结.md)、[B4](docs/agent/B4-完成总结.md)、[B5](docs/agent/B5-完成总结.md)、[B6](docs/agent/B6-完成总结.md)、[B7](docs/agent/B7-完成总结.md)、[C1](docs/agent/C1-完成总结.md)
+- 阶段完成总结：[B1](docs/agent/B1-完成总结.md)、[B2](docs/agent/B2-完成总结.md)、[B3](docs/agent/B3-完成总结.md)、[B4](docs/agent/B4-完成总结.md)、[B5](docs/agent/B5-完成总结.md)、[B6](docs/agent/B6-完成总结.md)、[B7](docs/agent/B7-完成总结.md)、[C1](docs/agent/C1-完成总结.md)、[C2](docs/agent/C2-完成总结.md)
 - C0 基线：[环境与基线报告](docs/agent/C0-环境与基线报告.md)、[PRD 覆盖表](docs/agent/C阶段-PRD覆盖表.md)、[集成设计与风险](docs/agent/C0-集成设计与风险.md)
 - C1 证据：[测试报告](docs/agent/C1-测试报告.md)、[人工检查清单](docs/agent/C1-人工检查清单.md)
+- C2 证据：[测试报告](docs/agent/C2-测试报告.md)、[人工检查清单](docs/agent/C2-人工检查清单.md)
 - 数据模型与备份格式：[B7 数据模型与备份格式](docs/agent/B7-数据模型与备份格式.md)
 - 技术与范围决策：[ADR 索引](docs/decisions/README.md)
 - 测试证据：[B7 测试报告](docs/agent/B7-测试报告.md)
@@ -97,4 +106,5 @@ QuickNotes_AgentHandoff/
 - 备份包未加密；不要将真实生产数据直接用于本原型测试。
 - C1 为单进程假设，不包含跨进程写入锁或 WAL；单实例只防止同一用户/数据根的第二实例打开数据。
 - C1 恢复产物默认保留、不自动清理；阻断状态必须通过显式验证/恢复入口解除，重启不会自动解除。
-- UI 编辑器、设置持久化、首次备份目录选择、schema 迁移、导出与性能/长时间稳定性测试留 C2–C7。
+- C2 草稿只保证已成功落盘的内容；强杀/断电可能丢失最后约 300ms 输入，真实故障边界留 C6。
+- schema 迁移、备份目录/恢复 UI、分类标签与生命周期 UI、托盘/全局快捷键、导出与性能/长时间稳定性测试留 C3–C7。
