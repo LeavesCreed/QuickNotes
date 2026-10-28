@@ -12,6 +12,7 @@ internal sealed class TestDatabase : IDisposable
     public SqliteConnectionFactory Factory { get; private set; } = null!;
     public ICatalogRepository Catalog { get; private set; } = null!;
     public INoteRepository Notes { get; private set; } = null!;
+    public string DatabasePath => _temporary.DatabasePath;
 
     public static async Task<TestDatabase> CreateAsync(int busyTimeoutMilliseconds = 250)
     {

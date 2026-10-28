@@ -1,9 +1,9 @@
-# B3 一致性备份快照 — 实施计划（草案）
+# B3 一致性备份快照 — 实施计划
 
-> **状态：** 待用户确认技术决策后再进入实施\
+> **状态：** D1–D10 已批准（2026-10-28），实施完成；见 `docs/agent/B3-完成总结.md`\
 > **日期：** 2026-10-28\
 > **阶段：** B3\
-> **基线：** B2 合并后的 `main`（B2 提交 `8afe2df`，当前等待手动合并）\
+> **基线：** `main` / `8e28b8e`（B2 与 QuickNotes 改名已合并）\
 > **上游依据：** `docs/product/PRD_v1.0.md` 11.2、11.4、11.5、11.6、15.2；`docs/agent/Agent对接文档_B阶段.md` B3；B2 设计第 15 节；`AGENTS.md`
 
 ## 1. 目标
@@ -105,6 +105,7 @@ public enum BackupType
 public enum BackupStatus
 {
     Succeeded,
+    ValidationFailed,
     SnapshotFailed,
     VerificationFailed,
     StorageUnavailable
@@ -113,6 +114,7 @@ public enum BackupStatus
 public enum BackupErrorCode
 {
     None = 0,
+    ValidationFailed,
     SnapshotFailed,
     SnapshotVerificationFailed,
     PackageWriteFailed,
@@ -158,7 +160,7 @@ public sealed class BackupException : Exception
 {
     public string Operation { get; }   // snapshot/verify/package/publish
     public string ErrorCode { get; }   // 稳定诊断码
-    public Guid? BackupId { get; }
+    public bool IsRetryable { get; }
 }
 
 public interface IBackupSnapshotProvider
@@ -176,6 +178,8 @@ public interface IBackupPackageStore
         string snapshotDatabasePath,
         long schemaVersion,
         BackupRequest request,
+        DateTimeOffset createdAtUtc,
+        DateTimeOffset createdAtLocal,
         CancellationToken cancellationToken = default);
 }
 
@@ -381,18 +385,18 @@ dotnet list QuickNotes_AgentHandoff/QuickNotes.DataPrototype.sln package --vulne
 - 不启用 WAL 时读写并发仍可能遇到 BUSY；B2 的有界保存语义继续适用。
 - SQLite 仍是候选技术，未最终冻结。
 
-## 14. 待确认清单
+## 14. 决策确认
 
-- [ ] D1 快照机制：Online Backup API
-- [ ] D2 B3 不启用 WAL
-- [ ] D3 ZIP + 固定两条目
-- [ ] D4 SHA-256
-- [ ] D5 临时文件 + 原子发布、不覆盖
-- [ ] D6 OS 级故障注入留 B6，B3 用注入式失败
-- [ ] D7 备份目录必须已存在且可写
-- [ ] D8 manifest 同时记录 UTC 与本地时间
-- [ ] D9 B3 仅 Manual 类型
-- [ ] D10 B3 只备份数据库，不含草稿/设置
-- [ ] 是否接受新增 `QuickNotes.Infrastructure.Backup` 项目
+- [x] D1 快照机制：Online Backup API
+- [x] D2 B3 不启用 WAL
+- [x] D3 ZIP + 固定两条目
+- [x] D4 SHA-256
+- [x] D5 临时文件 + 原子发布、不覆盖
+- [x] D6 OS 级故障注入留 B6，B3 用注入式失败
+- [x] D7 备份目录必须已存在且可写
+- [x] D8 manifest 同时记录 UTC 与本地时间
+- [x] D9 B3 仅 Manual 类型
+- [x] D10 B3 只备份数据库，不含草稿/设置
+- [x] 新增 `QuickNotes.Infrastructure.Backup` 项目
 
-确认以上决策后，可将本计划转为正式实施任务并开始 Task 1。
+以上决策已于 2026-10-28 全部批准；实施、测试与验证结果见 `docs/agent/B3-完成总结.md`。

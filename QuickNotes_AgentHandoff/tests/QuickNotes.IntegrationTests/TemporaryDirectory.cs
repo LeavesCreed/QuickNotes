@@ -4,7 +4,8 @@ internal sealed class TemporaryDirectory : IDisposable
 {
     public TemporaryDirectory()
     {
-        RootPath = Path.Combine(Path.GetTempPath(), "QuickNotes-B2-Drafts", Guid.NewGuid().ToString("N"));
+        RootPath = Path.Combine(Path.GetTempPath(), "QuickNotes-Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(RootPath);
     }
 
     public string RootPath { get; }
