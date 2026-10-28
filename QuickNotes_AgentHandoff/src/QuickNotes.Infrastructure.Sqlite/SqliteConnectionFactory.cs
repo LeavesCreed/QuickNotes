@@ -6,8 +6,12 @@ public sealed class SqliteConnectionFactory
 {
     private readonly string _connectionString;
     private readonly int _busyTimeoutMilliseconds;
+    private readonly Action<SqliteConnection>? _configureConnection;
 
-    public SqliteConnectionFactory(string databasePath, int busyTimeoutMilliseconds = 250)
+    public SqliteConnectionFactory(
+        string databasePath,
+        int busyTimeoutMilliseconds = 250,
+        Action<SqliteConnection>? configureConnection = null)
     {
         if (busyTimeoutMilliseconds < 0)
         {
@@ -18,6 +22,7 @@ public sealed class SqliteConnectionFactory
         }
 
         _busyTimeoutMilliseconds = busyTimeoutMilliseconds;
+        _configureConnection = configureConnection;
         _connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = databasePath,
@@ -37,6 +42,7 @@ public sealed class SqliteConnectionFactory
             command.CommandText =
                 $"PRAGMA foreign_keys=ON; PRAGMA busy_timeout={_busyTimeoutMilliseconds};";
             await command.ExecuteNonQueryAsync(cancellationToken);
+            _configureConnection?.Invoke(connection);
             return connection;
         }
         catch (SqliteException exception)

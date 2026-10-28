@@ -1,4 +1,3 @@
-using System.IO.Compression;
 using QuickNotes.Application;
 using QuickNotes.Domain;
 using QuickNotes.Infrastructure.Backup;
@@ -186,7 +185,7 @@ public sealed class RestoreIntegrationTests
             },
             utcNow,
             TimeZoneInfo.ConvertTime(utcNow, TimeZoneInfo.Local));
-        CorruptDatabaseEntry(package.PackagePath);
+        FaultInjectionTestData.CorruptDatabaseEntry(package.PackagePath);
         var draftStore = new FileNoteDraftStore(Path.Combine(temporary.RootPath, "drafts"));
         var coordinator = CreateCoordinator(
             current.DatabasePath,
@@ -272,15 +271,5 @@ public sealed class RestoreIntegrationTests
         await using var command = connection.CreateCommand();
         command.CommandText = sql;
         await command.ExecuteNonQueryAsync();
-    }
-
-    private static void CorruptDatabaseEntry(string packagePath)
-    {
-        using var archive = ZipFile.Open(packagePath, ZipArchiveMode.Update);
-        var entry = archive.GetEntry(BackupManifest.DatabaseEntryName)!;
-        entry.Delete();
-        var replacement = archive.CreateEntry(BackupManifest.DatabaseEntryName);
-        using var stream = replacement.Open();
-        stream.Write(new byte[] { 1, 2, 3, 4 });
     }
 }
