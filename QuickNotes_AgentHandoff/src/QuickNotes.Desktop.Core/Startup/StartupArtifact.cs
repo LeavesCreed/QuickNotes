@@ -9,6 +9,7 @@ public enum StartupArtifactKind
     VerifyTempFile,
     Sidecar,
     ProtectionSnapshot,
+    QuarantinedDatabase,
     DraftFile
 }
 

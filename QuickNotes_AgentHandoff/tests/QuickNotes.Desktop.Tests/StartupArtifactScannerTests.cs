@@ -55,6 +55,22 @@ public sealed class StartupArtifactScannerTests
     }
 
     [Fact]
+    public void Scan_QuarantinedDatabase_IsRetained()
+    {
+        using var temporary = new TestTemporaryDirectory();
+        var paths = DesktopPaths.Create(temporary.RootPath);
+        paths.EnsureDirectories();
+        var quarantinePath = Path.Combine(paths.DataRoot, ".quicknotes-quarantine-abc.db");
+        File.WriteAllText(quarantinePath, "corrupt");
+
+        var inventory = new StartupArtifactScanner(paths).Scan();
+
+        var artifact = Assert.Single(inventory.Artifacts);
+        Assert.Equal(StartupArtifactKind.QuarantinedDatabase, artifact.Kind);
+        Assert.True(File.Exists(quarantinePath));
+    }
+
+    [Fact]
     public void Scan_BackupTempsAndProtectionSnapshot_AreReported()
     {
         using var temporary = new TestTemporaryDirectory();

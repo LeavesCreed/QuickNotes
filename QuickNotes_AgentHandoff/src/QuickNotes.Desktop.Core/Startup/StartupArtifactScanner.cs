@@ -10,6 +10,7 @@ public sealed class StartupArtifactScanner
     private const string PackageTempFilePattern = ".quicknotes-package-*.tmp";
     private const string VerifyTempFilePattern = ".quicknotes-verify-*";
     private const string ProbeTempFilePattern = ".quicknotes-probe-*";
+    private const string QuarantineFilePattern = ".quicknotes-quarantine-*.db";
     private const string ManualBackupPattern = "quicknotes-*-manual.zip";
 
     private readonly DesktopPaths _paths;
@@ -36,6 +37,7 @@ public sealed class StartupArtifactScanner
         AddFiles(artifacts, seen, _paths.DataRoot, PackageTempFilePattern, StartupArtifactKind.PackageTempFile);
         AddFiles(artifacts, seen, _paths.DataRoot, VerifyTempFilePattern, StartupArtifactKind.VerifyTempFile);
         AddFiles(artifacts, seen, _paths.DataRoot, ProbeTempFilePattern, StartupArtifactKind.VerifyTempFile);
+        AddFiles(artifacts, seen, _paths.DataRoot, QuarantineFilePattern, StartupArtifactKind.QuarantinedDatabase);
         AddFiles(artifacts, seen, _paths.DraftDirectory, "*.json", StartupArtifactKind.DraftFile);
 
         if (_backupDirectory is not null)
