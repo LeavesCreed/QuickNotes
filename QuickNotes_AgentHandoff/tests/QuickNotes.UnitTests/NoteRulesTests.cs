@@ -68,6 +68,22 @@ public sealed class NoteRulesTests
                 Width = 0,
                 Height = 240
             }));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            NoteRules.ValidateWindowLayout(new NoteWindowLayout
+            {
+                Left = 0,
+                Top = 0,
+                Width = double.NaN,
+                Height = 240
+            }));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            NoteRules.ValidateWindowLayout(new NoteWindowLayout
+            {
+                Left = 0,
+                Top = 0,
+                Width = 320,
+                Height = double.PositiveInfinity
+            }));
         NoteRules.ValidateWindowLayout(null);
     }
 
