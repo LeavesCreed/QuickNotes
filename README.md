@@ -21,4 +21,4 @@ dotnet test QuickNotes_AgentHandoff/QuickNotes.DataPrototype.sln --no-build --no
 dotnet run --project QuickNotes_AgentHandoff/src/QuickNotes.Desktop.Wpf/QuickNotes.Desktop.Wpf.csproj -- --data-root "$env:TEMP\QuickNotes-C2-Demo"
 ```
 
-当前基线：353/353 测试通过（单元 120 + 集成 128 + 桌面 105）；构建 0 警告、0 错误；NuGet 无已知漏洞包。Ready 时直接进入最小工作区（列表、编辑、自动保存、草稿恢复）；未 Ready 时显示启动/诊断/恢复窗口。C2 人工检查清单尚未由用户执行；测试、冒烟与宿主均只使用临时数据根。
+当前基线：353/353 测试通过（单元 120 + 集成 128 + 桌面 105）；构建 0 警告、0 错误；NuGet 无已知漏洞包。Ready 时直接进入最小工作区（列表、编辑、自动保存、草稿恢复）；未 Ready 时显示启动/诊断/恢复窗口。C2 人工检查 M01–M12、M15、M16 已通过；M13/M14 未执行；C5/C6 未运行。测试、冒烟与宿主均只使用临时数据根。
