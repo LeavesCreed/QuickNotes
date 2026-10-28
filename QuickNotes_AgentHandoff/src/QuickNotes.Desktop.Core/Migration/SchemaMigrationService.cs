@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using QuickNotes.Application;
 using QuickNotes.Desktop.Diagnostics;
 using QuickNotes.Desktop.Paths;
@@ -95,16 +96,50 @@ public sealed class SchemaMigrationService : ISchemaMigrationService
         }
         catch (Exception exception)
         {
+            var failure = DescribeFailure(exception);
             _log.TryWrite(
                 "ERROR",
                 "migration",
-                "schema migration failed; the original database and protection snapshot were preserved",
-                exception.GetType().Name);
+                $"schema migration failed ({failure.Detail}); the original database and protection snapshot were preserved",
+                failure.ErrorCode);
             return SchemaMigrationResult.Failed(
                 "migration_failed",
                 protectionSnapshotPath,
                 currentSchemaVersion,
-                exception.GetType().Name);
+                failure.Detail);
         }
+    }
+
+    /// <summary>
+    /// Preserves the underlying error code (including SQLite failure details)
+    /// for diagnostics. The startup-facing error code stays
+    /// <c>migration_failed</c>.
+    /// </summary>
+    private static (string ErrorCode, string Detail) DescribeFailure(Exception exception)
+    {
+        var errorCode = exception switch
+        {
+            SchemaMigrationException migrationException => migrationException.ErrorCode,
+            RestoreException restoreException => restoreException.ErrorCode,
+            _ => exception.GetType().Name
+        };
+
+        var detail = new StringBuilder(exception.GetType().Name);
+        if (!string.Equals(errorCode, exception.GetType().Name, StringComparison.Ordinal))
+        {
+            detail.Append(" [").Append(errorCode).Append(']');
+        }
+
+        if (!string.IsNullOrWhiteSpace(exception.Message))
+        {
+            detail.Append(": ").Append(exception.Message);
+        }
+
+        for (var inner = exception.InnerException; inner is not null; inner = inner.InnerException)
+        {
+            detail.Append(" -> ").Append(inner.GetType().Name).Append(": ").Append(inner.Message);
+        }
+
+        return (errorCode, detail.ToString());
     }
 }

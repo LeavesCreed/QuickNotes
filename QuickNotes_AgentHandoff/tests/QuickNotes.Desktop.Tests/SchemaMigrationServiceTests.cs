@@ -143,6 +143,8 @@ public sealed class SchemaMigrationServiceTests
 
         Assert.Equal(SchemaMigrationStatus.Failed, result.Status);
         Assert.Equal("migration_failed", result.ErrorCode);
+        Assert.Contains("SQLite error", result.Message);
+        Assert.Contains("database_meta", result.Message);
         Assert.NotNull(result.ProtectionSnapshotPath);
         Assert.True(File.Exists(result.ProtectionSnapshotPath));
         Assert.Equal(1, await SchemaMigrationTestDatabase.ReadUserVersionAsync(paths.DatabasePath));
@@ -151,6 +153,33 @@ public sealed class SchemaMigrationServiceTests
             await SchemaMigrationTestDatabase.ScalarLongAsync(
                 paths.DatabasePath,
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'app_settings';"));
+        var logText = File.ReadAllText(
+            Path.Combine(paths.LogDirectory, "quicknotes-20261028.log"));
+        Assert.Contains("ERROR | migration | migration_failed", logText);
+        Assert.Contains("database_meta", logText);
+    }
+
+    [Fact]
+    public async Task EnsureCurrent_WhenMigratorThrowsSchemaMigrationException_PreservesDetailInResultAndLog()
+    {
+        using var temporary = new TestTemporaryDirectory();
+        var paths = DesktopPaths.Create(Path.Combine(temporary.RootPath, "data"));
+        paths.EnsureDirectories();
+        await SchemaMigrationTestDatabase.CreateVersionOneAsync(paths.DatabasePath);
+        var service = CreateService(paths, new DetailedFailureSchemaMigrator());
+
+        var result = await service.EnsureCurrentAsync(1);
+
+        Assert.Equal(SchemaMigrationStatus.Failed, result.Status);
+        Assert.Equal("migration_failed", result.ErrorCode);
+        Assert.Equal(1, result.SchemaVersion);
+        Assert.Contains("migration_verification_failed", result.Message);
+        Assert.Contains("database disk image is malformed", result.Message);
+
+        var logText = File.ReadAllText(
+            Path.Combine(paths.LogDirectory, "quicknotes-20261028.log"));
+        Assert.Contains("ERROR | migration | migration_verification_failed", logText);
+        Assert.Contains("database disk image is malformed", logText);
     }
 
     private static SchemaMigrationService CreateService(
@@ -190,6 +219,19 @@ internal sealed class ThrowingSchemaMigrator : ISchemaMigrator
         CancellationToken cancellationToken = default) =>
         Task.FromException<SchemaMigrationOutcome>(
             new InvalidOperationException("simulated migration failure"));
+}
+
+internal sealed class DetailedFailureSchemaMigrator : ISchemaMigrator
+{
+    public Task<SchemaMigrationOutcome> MigrateToCurrentAsync(
+        string databasePath,
+        bool rotateIdentity,
+        CancellationToken cancellationToken = default) =>
+        Task.FromException<SchemaMigrationOutcome>(
+            new SchemaMigrationException(
+                "migration_verification_failed",
+                "The migrated database failed integrity_check.",
+                new InvalidOperationException("simulated SQLite detail: database disk image is malformed")));
 }
 
 internal static class SchemaMigrationTestDatabase
