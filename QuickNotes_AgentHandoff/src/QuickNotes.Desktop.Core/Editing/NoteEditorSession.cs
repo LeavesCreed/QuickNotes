@@ -214,7 +214,6 @@ public sealed class NoteEditorSession : IAsyncDisposable
         {
             ThrowIfDisposed();
             _saveDebounce?.Cancel();
-            _saveDebounce?.Dispose();
             _saveDebounce = null;
         }
 
@@ -581,10 +580,8 @@ public sealed class NoteEditorSession : IAsyncDisposable
 
         _disposed = true;
         _draftDebounce?.Cancel();
-        _draftDebounce?.Dispose();
         _draftDebounce = null;
         _saveDebounce?.Cancel();
-        _saveDebounce?.Dispose();
         _saveDebounce = null;
         await _lifetime.CancelAsync().ConfigureAwait(false);
         _lifetime.Dispose();
@@ -598,7 +595,6 @@ public sealed class NoteEditorSession : IAsyncDisposable
         }
 
         _draftDebounce?.Cancel();
-        _draftDebounce?.Dispose();
         var source = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         _draftDebounce = source;
         var now = _timeProvider.GetUtcNow().ToUniversalTime();
@@ -643,7 +639,6 @@ public sealed class NoteEditorSession : IAsyncDisposable
         }
 
         _saveDebounce?.Cancel();
-        _saveDebounce?.Dispose();
         var source = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         _saveDebounce = source;
         var now = _timeProvider.GetUtcNow().ToUniversalTime();
