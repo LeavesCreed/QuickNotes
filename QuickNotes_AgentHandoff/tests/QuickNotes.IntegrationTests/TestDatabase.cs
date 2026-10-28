@@ -46,9 +46,9 @@ internal sealed class TestDatabase : IDisposable
 
     private readonly TemporaryDatabase _temporary = new();
 
-    public TestDatabase()
+    public TestDatabase(int busyTimeoutMilliseconds = 250)
     {
-        Reopen();
+        Reopen(busyTimeoutMilliseconds);
     }
 
     public SqliteConnectionFactory Factory { get; private set; } = null!;
@@ -58,7 +58,7 @@ internal sealed class TestDatabase : IDisposable
 
     public static async Task<TestDatabase> CreateAsync(int busyTimeoutMilliseconds = 250)
     {
-        var database = new TestDatabase();
+        var database = new TestDatabase(busyTimeoutMilliseconds);
         await new SqliteSchema(database.Factory).InitializeAsync();
         return database;
     }
