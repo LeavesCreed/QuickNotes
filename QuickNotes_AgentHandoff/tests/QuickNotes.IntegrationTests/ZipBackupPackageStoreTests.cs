@@ -30,7 +30,7 @@ public sealed class ZipBackupPackageStoreTests
         var store = new ZipBackupPackageStore();
         var request = new BackupRequest { BackupDirectory = temporary.RootPath };
 
-        var info = await store.PublishAsync(snapshotPath, 1, request, UtcNow, LocalNow);
+        var info = await store.PublishAsync(snapshotPath, 2, request, UtcNow, LocalNow);
 
         Assert.True(File.Exists(info.PackagePath));
         Assert.EndsWith(".zip", info.PackagePath, StringComparison.Ordinal);
@@ -38,7 +38,7 @@ public sealed class ZipBackupPackageStoreTests
         Assert.Equal(BackupType.Manual, info.Manifest.BackupType);
         Assert.Equal(UtcNow, info.Manifest.CreatedAtUtc);
         Assert.Equal(LocalNow, info.Manifest.CreatedAtLocal);
-        Assert.Equal(1, info.Manifest.SchemaVersion);
+        Assert.Equal(2, info.Manifest.SchemaVersion);
         Assert.Equal(BackupManifest.DatabaseEntryName, info.Manifest.DatabaseFileName);
         Assert.True(info.Manifest.DatabaseSizeBytes > 0);
         Assert.Equal(64, info.Manifest.DatabaseSha256.Length);
@@ -71,7 +71,7 @@ public sealed class ZipBackupPackageStoreTests
 
         var info = await store.PublishAsync(
             snapshotPath,
-            1,
+            2,
             new BackupRequest { BackupDirectory = temporary.RootPath },
             UtcNow,
             LocalNow);
@@ -96,7 +96,7 @@ public sealed class ZipBackupPackageStoreTests
         };
 
         var exception = await Assert.ThrowsAsync<BackupException>(
-            () => store.PublishAsync(snapshotPath, 1, request, UtcNow, LocalNow));
+            () => store.PublishAsync(snapshotPath, 2, request, UtcNow, LocalNow));
 
         Assert.Equal(BackupErrorCodes.DestinationUnavailable, exception.ErrorCode);
     }
@@ -111,7 +111,7 @@ public sealed class ZipBackupPackageStoreTests
         var exception = await Assert.ThrowsAsync<BackupException>(
             () => store.PublishAsync(
                 Path.Combine(temporary.RootPath, "missing.db"),
-                1,
+                2,
                 request,
                 UtcNow,
                 LocalNow));
@@ -132,7 +132,7 @@ public sealed class ZipBackupPackageStoreTests
         cancellation.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => store.PublishAsync(snapshotPath, 1, request, UtcNow, LocalNow, cancellation.Token));
+            () => store.PublishAsync(snapshotPath, 2, request, UtcNow, LocalNow, cancellation.Token));
 
         Assert.Empty(Directory.GetFiles(temporary.RootPath, "quicknotes-*.zip"));
         Assert.Empty(Directory.GetFiles(temporary.RootPath, ".quicknotes-*"));
@@ -241,7 +241,7 @@ public sealed class ZipBackupPackageStoreTests
         var exception = await Assert.ThrowsAsync<BackupException>(
             () => store.PublishAsync(
                 snapshotPath,
-                1,
+                2,
                 new BackupRequest { BackupDirectory = temporary.RootPath },
                 UtcNow,
                 LocalNow));
@@ -336,7 +336,7 @@ public sealed class ZipBackupPackageStoreTests
         var store = new ZipBackupPackageStore();
         var info = await store.PublishAsync(
             snapshotPath,
-            1,
+            2,
             new BackupRequest { BackupDirectory = temporary.RootPath },
             UtcNow,
             LocalNow);

@@ -142,7 +142,7 @@ public sealed class ApplicationStateStoreTests
         FormatVersion = ApplicationState.CurrentFormatVersion,
         InstallationId = Guid.NewGuid(),
         InitializationStatus = ApplicationInitializationStatus.Ready,
-        SchemaVersion = 1,
+        SchemaVersion = 2,
         LastStartupUtc = Now
     };
 }

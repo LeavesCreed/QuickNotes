@@ -184,7 +184,7 @@ public sealed class MissingDatabaseRebuilderTests
         FormatVersion = ApplicationState.CurrentFormatVersion,
         InstallationId = Guid.NewGuid(),
         InitializationStatus = ApplicationInitializationStatus.Ready,
-        SchemaVersion = 1,
+        SchemaVersion = 2,
         LastStartupUtc = Now
     };
 
@@ -214,7 +214,7 @@ public sealed class MissingDatabaseRebuilderTests
         Directory.CreateDirectory(backupDirectory);
         var package = await new ZipBackupPackageStore().PublishAsync(
             snapshotPath,
-            1,
+            2,
             new BackupRequest
             {
                 BackupDirectory = backupDirectory,

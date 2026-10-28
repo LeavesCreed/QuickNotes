@@ -67,7 +67,7 @@ public sealed class RestoreIntegrationTests
         var localNow = TimeZoneInfo.ConvertTime(utcNow, TimeZoneInfo.Local);
         var package = await new ZipBackupPackageStore().PublishAsync(
             snapshotPath,
-            1,
+            2,
             new BackupRequest
             {
                 BackupDirectory = backupDirectory,
@@ -110,7 +110,7 @@ public sealed class RestoreIntegrationTests
         Assert.Equal(1, preflight.CurrentCounts!.ActiveNotes);
         Assert.Equal(1, preflight.CurrentCounts.Tags);
         Assert.Equal(1, preflight.CurrentCounts.NoteTags);
-        Assert.Equal(1, preflight.Manifest!.SchemaVersion);
+        Assert.Equal(2, preflight.Manifest!.SchemaVersion);
 
         var result = await coordinator.RestoreAsync(allowedRequest);
 
@@ -177,7 +177,7 @@ public sealed class RestoreIntegrationTests
         var utcNow = DateTimeOffset.UtcNow;
         var package = await new ZipBackupPackageStore().PublishAsync(
             snapshotPath,
-            1,
+            2,
             new BackupRequest
             {
                 BackupDirectory = backupDirectory,
@@ -213,7 +213,7 @@ public sealed class RestoreIntegrationTests
         await current.Notes.CreateAsync(currentNote, Array.Empty<Guid>());
         using var backupDatabase = await TestDatabase.CreateAsync();
         await backupDatabase.Notes.CreateAsync(TestData.NewNote(), Array.Empty<Guid>());
-        await ExecuteAsync(backupDatabase.Factory, "PRAGMA user_version=2;");
+        await ExecuteAsync(backupDatabase.Factory, "PRAGMA user_version=3;");
         using var temporary = new TemporaryDirectory();
         var backupDirectory = Path.Combine(temporary.RootPath, "backups");
         Directory.CreateDirectory(backupDirectory);
@@ -222,7 +222,7 @@ public sealed class RestoreIntegrationTests
         var utcNow = DateTimeOffset.UtcNow;
         var package = await new ZipBackupPackageStore().PublishAsync(
             snapshotPath,
-            2,
+            3,
             new BackupRequest
             {
                 BackupDirectory = backupDirectory,

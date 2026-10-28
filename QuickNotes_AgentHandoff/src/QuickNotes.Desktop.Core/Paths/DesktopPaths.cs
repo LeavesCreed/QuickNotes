@@ -13,6 +13,8 @@ public sealed record DesktopPaths
     public string LogDirectory => Path.Combine(DataRoot, "logs");
     public string StatePath => Path.Combine(DataRoot, StateFileName);
     public string RestoreJournalPath => Path.Combine(DataRoot, RestoreJournalFileName);
+    public string DeviceSettingsPath => Path.Combine(DataRoot, "device-settings.json");
+    public string MigrationProtectionDirectory => Path.Combine(DataRoot, "migration-protection");
 
     public static DesktopPaths CreateDefault() =>
         Create(Path.Combine(

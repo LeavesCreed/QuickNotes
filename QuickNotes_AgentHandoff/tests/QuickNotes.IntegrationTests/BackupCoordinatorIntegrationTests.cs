@@ -44,7 +44,7 @@ public sealed class BackupCoordinatorIntegrationTests
         Assert.Equal(BackupType.Manual, result.Manifest!.BackupType);
         Assert.Equal(UtcNow, result.Manifest.CreatedAtUtc);
         Assert.Equal(TimeZoneInfo.ConvertTime(UtcNow, LocalZone), result.Manifest.CreatedAtLocal);
-        Assert.Equal(1, result.Manifest.SchemaVersion);
+        Assert.Equal(2, result.Manifest.SchemaVersion);
         Assert.Equal(
             Path.Combine(backupDirectory, "quicknotes-20261028-093000-000-manual.zip"),
             result.PackagePath);
@@ -156,7 +156,7 @@ public sealed class BackupCoordinatorIntegrationTests
 
         Assert.Equal(BackupStatus.Succeeded, result.Status);
         Assert.NotNull(result.Manifest);
-        Assert.Equal(1, result.Manifest!.SchemaVersion);
+        Assert.Equal(2, result.Manifest!.SchemaVersion);
         Assert.True(result.Manifest.DatabaseSizeBytes > 0);
         await new BackupPackageVerifier().VerifyAsync(result.PackagePath!, backupDirectory);
     }

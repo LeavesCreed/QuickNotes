@@ -91,7 +91,7 @@ public sealed class FaultInjectionBackupTests
         var utcNow = DateTimeOffset.UtcNow;
         var package = await new ZipBackupPackageStore().PublishAsync(
             snapshotPath,
-            1,
+            2,
             new BackupRequest
             {
                 BackupDirectory = backupDirectory,

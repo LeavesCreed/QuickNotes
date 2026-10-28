@@ -7,7 +7,7 @@ namespace QuickNotes.Desktop.Startup;
 
 public sealed class StartupCoordinator
 {
-    private const long SupportedSchemaVersion = 1;
+    private const long SupportedSchemaVersion = 2;
 
     private readonly DesktopPaths _paths;
     private readonly ApplicationStateStore _stateStore;

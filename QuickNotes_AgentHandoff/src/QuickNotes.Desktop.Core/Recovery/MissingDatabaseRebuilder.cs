@@ -7,7 +7,7 @@ namespace QuickNotes.Desktop.Recovery;
 
 public sealed class MissingDatabaseRebuilder
 {
-    private const long SupportedSchemaVersion = 1;
+    private const long SupportedSchemaVersion = 2;
 
     private readonly DesktopPaths _paths;
     private readonly IBackupPackageExtractor _extractor;

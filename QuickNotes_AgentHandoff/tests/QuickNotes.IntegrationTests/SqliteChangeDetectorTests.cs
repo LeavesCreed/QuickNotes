@@ -16,7 +16,7 @@ public sealed class SqliteChangeDetectorTests
         var initial = await detector.GetFingerprintAsync();
         var initialAgain = await detector.GetFingerprintAsync();
         Assert.Equal(initial, initialAgain);
-        Assert.StartsWith("schema=1;", initial, StringComparison.Ordinal);
+        Assert.StartsWith("schema=2;", initial, StringComparison.Ordinal);
 
         var tag = new Tag { Id = Guid.NewGuid(), Name = "fingerprint-tag" };
         await database.Catalog.CreateTagAsync(tag);

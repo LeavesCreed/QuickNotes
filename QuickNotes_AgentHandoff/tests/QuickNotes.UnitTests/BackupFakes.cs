@@ -8,7 +8,7 @@ internal sealed class FakeBackupSnapshotProvider : IBackupSnapshotProvider
         static (path, _) =>
         {
             File.WriteAllText(path, "snapshot");
-            return Task.FromResult(new SnapshotInfo(1));
+            return Task.FromResult(new SnapshotInfo(2));
         };
 
     public int Calls { get; private set; }
@@ -97,7 +97,7 @@ internal static class BackupTestData
         BackupType type = BackupType.Manual,
         DateTimeOffset? utc = null,
         DateTimeOffset? local = null,
-        long schemaVersion = 1)
+        long schemaVersion = 2)
     {
         var utcNow = utc ?? UtcNow;
         return new BackupManifest

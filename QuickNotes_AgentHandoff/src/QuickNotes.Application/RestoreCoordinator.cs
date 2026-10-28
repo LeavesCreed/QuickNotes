@@ -6,7 +6,7 @@ namespace QuickNotes.Application;
 
 public sealed class RestoreCoordinator : IRestoreCoordinator
 {
-    public const long SupportedSchemaVersion = 1;
+    public const long SupportedSchemaVersion = 2;
     private const long SpaceSafetyMarginBytes = 16L * 1024 * 1024;
 
     private readonly IBackupPackageExtractor _extractor;

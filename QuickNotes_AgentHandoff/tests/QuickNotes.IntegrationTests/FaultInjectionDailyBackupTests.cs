@@ -132,7 +132,7 @@ public sealed class FaultInjectionDailyBackupTests
     {
         var info = await new ZipBackupPackageStore().PublishAsync(
             snapshotPath,
-            1,
+            2,
             new BackupRequest
             {
                 BackupDirectory = backupDirectory,

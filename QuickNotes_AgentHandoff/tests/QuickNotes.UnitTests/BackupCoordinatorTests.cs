@@ -34,7 +34,7 @@ public sealed class BackupCoordinatorTests
         Assert.True(result.DurationMilliseconds >= 0);
         Assert.Equal(1, snapshots.Calls);
         Assert.Equal(1, packages.Calls);
-        Assert.Equal(1, packages.LastSchemaVersion);
+        Assert.Equal(2, packages.LastSchemaVersion);
         Assert.Equal(BackupTestData.UtcNow, packages.LastCreatedAtUtc);
         Assert.Equal(
             TimeZoneInfo.ConvertTime(BackupTestData.UtcNow, BackupTestData.LocalZone),

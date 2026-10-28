@@ -30,7 +30,7 @@ public sealed class StartupCoordinatorTests
         var state = await stateStore.ReadAsync();
         Assert.Equal(ApplicationStateReadStatus.Found, state.Status);
         Assert.Equal(ApplicationInitializationStatus.Ready, state.State!.InitializationStatus);
-        Assert.Equal(1, state.State.SchemaVersion);
+        Assert.Equal(2, state.State.SchemaVersion);
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public sealed class StartupCoordinatorTests
         var result = await CreateCoordinator(paths, stateStore, CreateJournalStore(paths)).StartAsync();
 
         Assert.Equal(StartupMode.Ready, result.Mode);
-        Assert.Equal(1, result.DatabaseInfo!.SchemaVersion);
+        Assert.Equal(2, result.DatabaseInfo!.SchemaVersion);
         Assert.True(result.CanEnterNormalUse);
     }
 
@@ -335,7 +335,7 @@ public sealed class StartupCoordinatorTests
         FormatVersion = ApplicationState.CurrentFormatVersion,
         InstallationId = Guid.NewGuid(),
         InitializationStatus = ApplicationInitializationStatus.Ready,
-        SchemaVersion = 1,
+        SchemaVersion = 2,
         LastStartupUtc = Now
     };
 

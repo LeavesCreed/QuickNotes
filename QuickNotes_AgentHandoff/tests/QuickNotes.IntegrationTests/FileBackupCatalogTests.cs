@@ -30,13 +30,13 @@ public sealed class FileBackupCatalogTests
         var manualLocal = ManualUtc.ToOffset(TimeSpan.FromHours(8));
         await store.PublishAsync(
             snapshotPath,
-            1,
+            2,
             new BackupRequest { BackupDirectory = backupDirectory, Type = BackupType.Daily },
             DailyUtc,
             dailyLocal);
         await store.PublishAsync(
             snapshotPath,
-            1,
+            2,
             new BackupRequest { BackupDirectory = backupDirectory, Type = BackupType.Manual },
             ManualUtc,
             manualLocal);
@@ -69,7 +69,7 @@ public sealed class FileBackupCatalogTests
         await new SqliteSnapshotProvider(database.DatabasePath).CreateAsync(snapshotPath);
         await new ZipBackupPackageStore().PublishAsync(
             snapshotPath,
-            1,
+            2,
             new BackupRequest { BackupDirectory = backupDirectory, Type = BackupType.Daily },
             DailyUtc,
             DailyUtc.ToOffset(TimeSpan.FromHours(8)));
@@ -102,7 +102,7 @@ public sealed class FileBackupCatalogTests
         await new SqliteSnapshotProvider(database.DatabasePath).CreateAsync(snapshotPath);
         var info = await new ZipBackupPackageStore().PublishAsync(
             snapshotPath,
-            1,
+            2,
             new BackupRequest { BackupDirectory = backupDirectory, Type = BackupType.Daily },
             DailyUtc,
             DailyUtc.ToOffset(TimeSpan.FromHours(8)));

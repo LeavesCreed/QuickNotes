@@ -26,9 +26,9 @@ internal sealed class FakeBackupPackageExtractor : IBackupPackageExtractor
 internal sealed class FakeRestoreStore : IRestoreStore
 {
     public string CurrentDatabasePath { get; set; } = string.Empty;
-    public RestoreDatabaseInfo CurrentInfo { get; set; } = new(1, Counts(1, 0, 0, 1, 0, 0));
-    public RestoreDatabaseInfo StagedInfo { get; set; } = new(1, Counts(2, 0, 0, 1, 1, 1));
-    public RestoreDatabaseInfo MismatchedInfo { get; set; } = new(1, Counts(99, 0, 0, 1, 0, 0));
+    public RestoreDatabaseInfo CurrentInfo { get; set; } = new(2, Counts(1, 0, 0, 1, 0, 0));
+    public RestoreDatabaseInfo StagedInfo { get; set; } = new(2, Counts(2, 0, 0, 1, 1, 1));
+    public RestoreDatabaseInfo MismatchedInfo { get; set; } = new(2, Counts(99, 0, 0, 1, 0, 0));
     public RestoreException? PrepareFailure { get; set; }
     public RestoreException? SwitchFailure { get; set; }
     public RestoreException? RollbackFailure { get; set; }

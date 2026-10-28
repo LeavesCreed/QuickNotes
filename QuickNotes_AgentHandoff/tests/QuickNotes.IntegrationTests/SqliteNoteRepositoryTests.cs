@@ -1,5 +1,6 @@
 using QuickNotes.Application;
 using QuickNotes.Domain;
+using QuickNotes.Infrastructure.Sqlite;
 using Xunit;
 
 namespace QuickNotes.IntegrationTests;
@@ -207,5 +208,161 @@ public sealed class SqliteNoteRepositoryTests
         var loaded = await database.Notes.GetAsync(note.Id);
         Assert.Equal(NoteLifecycle.Active, loaded!.Lifecycle);
         Assert.Equal(NoteDisplayIntent.Hidden, loaded.DisplayIntent);
+    }
+
+    [Fact]
+    public async Task Note_AppearanceAndLayout_RoundTrips()
+    {
+        using var database = new TestDatabase();
+        await new SqliteSchema(database.Factory).InitializeAsync();
+        var repository = new SqliteNoteRepository(database.Factory);
+        var now = DateTimeOffset.UtcNow;
+        var note = new Note
+        {
+            Id = Guid.NewGuid(),
+            Title = "title",
+            Body = "body",
+            CreatedAtUtc = now,
+            ModifiedAtUtc = now,
+            CategoryId = Category.UncategorizedId,
+            ColorMode = NoteColorMode.Manual,
+            ColorHex = "#FFCC00",
+            FontSize = 20,
+            WindowLayout = new NoteWindowLayout
+            {
+                Left = -120,
+                Top = 80,
+                Width = 360,
+                Height = 280
+            }
+        };
+
+        await repository.CreateAsync(note, Array.Empty<Guid>());
+        var loaded = await repository.GetAsync(note.Id);
+
+        Assert.Equal(NoteColorMode.Manual, loaded!.ColorMode);
+        Assert.Equal("#FFCC00", loaded.ColorHex);
+        Assert.Equal(20, loaded.FontSize);
+        Assert.Equal(note.WindowLayout, loaded.WindowLayout);
+    }
+
+    [Fact]
+    public async Task CreateAndGet_DefaultAppearanceIsFollowCategoryWithoutOverrides()
+    {
+        using var database = await TestDatabase.CreateAsync();
+        var note = TestData.NewNote();
+
+        var created = await database.Notes.CreateAsync(note, Array.Empty<Guid>());
+        var loaded = await database.Notes.GetAsync(note.Id);
+
+        Assert.Equal(NoteColorMode.FollowCategory, created.ColorMode);
+        Assert.Null(created.ColorHex);
+        Assert.Null(created.FontSize);
+        Assert.Null(created.WindowLayout);
+        Assert.Equal(created, loaded);
+    }
+
+    [Fact]
+    public async Task Update_PersistsAppearanceAndLayout()
+    {
+        using var database = await TestDatabase.CreateAsync();
+        var note = TestData.NewNote();
+        await database.Notes.CreateAsync(note, Array.Empty<Guid>());
+        var changed = note with
+        {
+            ColorMode = NoteColorMode.Manual,
+            ColorHex = "#112233",
+            FontSize = 30,
+            WindowLayout = new NoteWindowLayout
+            {
+                Left = 10,
+                Top = 20,
+                Width = 400,
+                Height = 300
+            },
+            ModifiedAtUtc = note.ModifiedAtUtc.AddMinutes(1)
+        };
+
+        var updated = await database.Notes.UpdateAsync(changed, 1, Array.Empty<Guid>());
+
+        Assert.Equal(NoteColorMode.Manual, updated.ColorMode);
+        Assert.Equal("#112233", updated.ColorHex);
+        Assert.Equal(30, updated.FontSize);
+        Assert.Equal(changed.WindowLayout, updated.WindowLayout);
+        Assert.Equal(updated, await database.Notes.GetAsync(note.Id));
+    }
+
+    [Fact]
+    public async Task Create_WithInvalidAppearance_ThrowsBeforeWriting()
+    {
+        using var database = await TestDatabase.CreateAsync();
+        var repository = database.Notes;
+        var note = TestData.NewNote();
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => repository.CreateAsync(
+                note with { ColorMode = NoteColorMode.Manual, ColorHex = "not-a-color" },
+                Array.Empty<Guid>()));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => repository.CreateAsync(
+                note with { FontSize = NoteRules.MaxFontSize + 1 },
+                Array.Empty<Guid>()));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => repository.CreateAsync(
+                note with
+                {
+                    WindowLayout = new NoteWindowLayout
+                    {
+                        Left = 0,
+                        Top = 0,
+                        Width = 0,
+                        Height = 100
+                    }
+                },
+                Array.Empty<Guid>()));
+
+        Assert.Null(await repository.GetAsync(note.Id));
+    }
+
+    [Fact]
+    public async Task NoteWrites_AdvanceChangeSequenceAndFailedWriteDoesNot()
+    {
+        using var database = await TestDatabase.CreateAsync();
+        var note = TestData.NewNote();
+        Assert.Equal(0, await ReadChangeSequenceAsync(database.Factory));
+
+        await database.Notes.CreateAsync(note, Array.Empty<Guid>());
+        Assert.Equal(1, await ReadChangeSequenceAsync(database.Factory));
+
+        await database.Notes.UpdateAsync(
+            note with
+            {
+                Body = "updated",
+                ModifiedAtUtc = note.ModifiedAtUtc.AddMinutes(1)
+            },
+            1,
+            Array.Empty<Guid>());
+        Assert.Equal(2, await ReadChangeSequenceAsync(database.Factory));
+
+        await database.Notes.SetLifecycleAsync(
+            note.Id,
+            NoteLifecycle.Archived,
+            2,
+            note.ModifiedAtUtc.AddMinutes(2));
+        Assert.Equal(3, await ReadChangeSequenceAsync(database.Factory));
+
+        await Assert.ThrowsAsync<NoteConstraintException>(
+            () => database.Notes.CreateAsync(
+                TestData.NewNote() with { CategoryId = Guid.NewGuid() },
+                Array.Empty<Guid>()));
+        Assert.Equal(3, await ReadChangeSequenceAsync(database.Factory));
+    }
+
+    private static async Task<long> ReadChangeSequenceAsync(SqliteConnectionFactory factory)
+    {
+        await using var connection = await factory.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT change_sequence FROM database_meta WHERE id = 1;";
+        return Convert.ToInt64(await command.ExecuteScalarAsync());
     }
 }

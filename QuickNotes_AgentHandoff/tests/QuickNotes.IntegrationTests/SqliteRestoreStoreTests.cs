@@ -32,7 +32,7 @@ public sealed class SqliteRestoreStoreTests
 
         var info = await new SqliteRestoreStore().InspectAsync(database.DatabasePath);
 
-        Assert.Equal(1, info.SchemaVersion);
+        Assert.Equal(2, info.SchemaVersion);
         Assert.Equal(1, info.Counts.ActiveNotes);
         Assert.Equal(1, info.Counts.ArchivedNotes);
         Assert.Equal(1, info.Counts.TrashNotes);

@@ -29,6 +29,8 @@ public sealed class DesktopPathsTests
         Assert.Equal(Path.Combine(paths.DataRoot, "logs"), paths.LogDirectory);
         Assert.Equal(Path.Combine(paths.DataRoot, "application-state.json"), paths.StatePath);
         Assert.Equal(Path.Combine(paths.DataRoot, "recovery-journal.json"), paths.RestoreJournalPath);
+        Assert.Equal(Path.Combine(paths.DataRoot, "device-settings.json"), paths.DeviceSettingsPath);
+        Assert.Equal(Path.Combine(paths.DataRoot, "migration-protection"), paths.MigrationProtectionDirectory);
     }
 
     [Fact]

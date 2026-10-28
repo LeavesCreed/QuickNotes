@@ -75,7 +75,7 @@ public sealed class RestoreCoordinatorTests
     {
         using var context = new RestoreTestContext();
         context.Extractor.Handler = (_, _, _) => Task.FromResult(
-            BackupTestData.Manifest() with { SchemaVersion = 2 });
+            BackupTestData.Manifest() with { SchemaVersion = 3 });
 
         var result = await context.Coordinator.PreflightAsync(context.Request);
 
@@ -390,7 +390,7 @@ public sealed class RestoreCoordinatorTests
                 BackupType.Manual,
                 BackupTestData.UtcNow,
                 BackupTestData.UtcNow.ToOffset(TimeSpan.FromHours(8)),
-                1),
+                2),
             DurationMilliseconds = 1
         })
     };

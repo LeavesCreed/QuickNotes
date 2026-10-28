@@ -9,7 +9,7 @@ namespace QuickNotes.Infrastructure.Sqlite;
 
 public sealed class SqliteNoteRepository : INoteRepository
 {
-    private const string NoteColumns = "id, title, body, created_at_utc, modified_at_utc, version, lifecycle, category_id, is_pinned, display_intent";
+    private const string NoteColumns = "id, title, body, created_at_utc, modified_at_utc, version, lifecycle, category_id, is_pinned, display_intent, color_mode, color_hex, font_size, window_left, window_top, window_width, window_height";
 
     private readonly SqliteConnectionFactory _connectionFactory;
 
@@ -24,6 +24,7 @@ public sealed class SqliteNoteRepository : INoteRepository
         CancellationToken cancellationToken = default)
     {
         const string operation = "create";
+        ValidateAppearance(note);
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
         SqliteTransaction? transaction = null;
         try
@@ -35,7 +36,7 @@ public sealed class SqliteNoteRepository : INoteRepository
                 command.Transaction = transaction;
                 command.CommandText = $"""
                     INSERT INTO notes ({NoteColumns})
-                    VALUES ($id, $title, $body, $created_at_utc, $modified_at_utc, 1, 0, $category_id, $is_pinned, $display_intent);
+                    VALUES ($id, $title, $body, $created_at_utc, $modified_at_utc, 1, 0, $category_id, $is_pinned, $display_intent, $color_mode, $color_hex, $font_size, $window_left, $window_top, $window_width, $window_height);
                     """;
                 command.Parameters.AddWithValue("$id", SqliteTypeMapping.GuidString(note.Id));
                 command.Parameters.AddWithValue("$title", (object?)note.Title ?? DBNull.Value);
@@ -45,6 +46,7 @@ public sealed class SqliteNoteRepository : INoteRepository
                 command.Parameters.AddWithValue("$category_id", SqliteTypeMapping.GuidString(note.CategoryId));
                 command.Parameters.AddWithValue("$is_pinned", note.IsPinned ? 1 : 0);
                 command.Parameters.AddWithValue("$display_intent", (int)note.DisplayIntent);
+                AddAppearanceParameters(command, note);
                 await command.ExecuteNonQueryAsync(cancellationToken);
             }
 
@@ -56,6 +58,7 @@ public sealed class SqliteNoteRepository : INoteRepository
                 throw new InvalidOperationException($"Note {note.Id} disappeared during create.");
             }
 
+            await SqliteChangeMarker.BumpAsync(connection, transaction, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             await CommitAsync(transaction, operation, note.Id, expectedVersion: 0);
             await DisposeTransactionQuietlyAsync(transaction);
@@ -172,6 +175,7 @@ public sealed class SqliteNoteRepository : INoteRepository
         CancellationToken cancellationToken = default)
     {
         const string operation = "update";
+        ValidateAppearance(note);
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
         SqliteTransaction? transaction = null;
         try
@@ -189,6 +193,13 @@ public sealed class SqliteNoteRepository : INoteRepository
                         category_id = $category_id,
                         is_pinned = $is_pinned,
                         display_intent = $display_intent,
+                        color_mode = $color_mode,
+                        color_hex = $color_hex,
+                        font_size = $font_size,
+                        window_left = $window_left,
+                        window_top = $window_top,
+                        window_width = $window_width,
+                        window_height = $window_height,
                         version = version + 1
                     WHERE id = $id AND version = $expected_version;
                     """;
@@ -200,6 +211,7 @@ public sealed class SqliteNoteRepository : INoteRepository
                 command.Parameters.AddWithValue("$category_id", SqliteTypeMapping.GuidString(note.CategoryId));
                 command.Parameters.AddWithValue("$is_pinned", note.IsPinned ? 1 : 0);
                 command.Parameters.AddWithValue("$display_intent", (int)note.DisplayIntent);
+                AddAppearanceParameters(command, note);
                 var affectedRows = await command.ExecuteNonQueryAsync(cancellationToken);
                 if (affectedRows == 0)
                 {
@@ -224,6 +236,7 @@ public sealed class SqliteNoteRepository : INoteRepository
                 throw new InvalidOperationException($"Note {note.Id} disappeared during update.");
             }
 
+            await SqliteChangeMarker.BumpAsync(connection, transaction, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             await CommitAsync(transaction, operation, note.Id, expectedVersion);
             await DisposeTransactionQuietlyAsync(transaction);
@@ -294,6 +307,7 @@ public sealed class SqliteNoteRepository : INoteRepository
                 throw new InvalidOperationException($"Note {id} disappeared during lifecycle update.");
             }
 
+            await SqliteChangeMarker.BumpAsync(connection, transaction, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             await CommitAsync(transaction, operation, id, expectedVersion);
             await DisposeTransactionQuietlyAsync(transaction);
@@ -319,6 +333,24 @@ public sealed class SqliteNoteRepository : INoteRepository
 
             throw;
         }
+    }
+
+    private static void ValidateAppearance(Note note)
+    {
+        NoteRules.ValidateColor(note.ColorMode, note.ColorHex);
+        NoteRules.ValidateFontSize(note.FontSize);
+        NoteRules.ValidateWindowLayout(note.WindowLayout);
+    }
+
+    private static void AddAppearanceParameters(SqliteCommand command, Note note)
+    {
+        command.Parameters.AddWithValue("$color_mode", (int)note.ColorMode);
+        command.Parameters.AddWithValue("$color_hex", (object?)note.ColorHex ?? DBNull.Value);
+        command.Parameters.AddWithValue("$font_size", (object?)note.FontSize ?? DBNull.Value);
+        command.Parameters.AddWithValue("$window_left", (object?)note.WindowLayout?.Left ?? DBNull.Value);
+        command.Parameters.AddWithValue("$window_top", (object?)note.WindowLayout?.Top ?? DBNull.Value);
+        command.Parameters.AddWithValue("$window_width", (object?)note.WindowLayout?.Width ?? DBNull.Value);
+        command.Parameters.AddWithValue("$window_height", (object?)note.WindowLayout?.Height ?? DBNull.Value);
     }
 
     private static async Task CommitAsync(

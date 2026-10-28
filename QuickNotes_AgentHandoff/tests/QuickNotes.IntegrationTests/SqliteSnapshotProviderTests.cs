@@ -36,11 +36,11 @@ public sealed class SqliteSnapshotProviderTests
 
         var info = await provider.CreateAsync(snapshotPath);
 
-        Assert.Equal(1, info.SchemaVersion);
+        Assert.Equal(2, info.SchemaVersion);
         Assert.True(File.Exists(snapshotPath));
         Assert.False(File.Exists(snapshotPath + "-wal"));
         Assert.False(File.Exists(snapshotPath + "-shm"));
-        await AssertSnapshotValidAsync(snapshotPath, 1);
+        await AssertSnapshotValidAsync(snapshotPath, 2);
 
         var snapshotNotes = new SqliteNoteRepository(new SqliteConnectionFactory(snapshotPath));
         Assert.Equal(active with { Version = 1 }, await snapshotNotes.GetAsync(active.Id));
@@ -102,8 +102,8 @@ public sealed class SqliteSnapshotProviderTests
             await Task.Delay(20);
             var info = await provider.CreateAsync(snapshotPath);
 
-            Assert.Equal(1, info.SchemaVersion);
-            await AssertSnapshotValidAsync(snapshotPath, 1);
+            Assert.Equal(2, info.SchemaVersion);
+            await AssertSnapshotValidAsync(snapshotPath, 2);
         }
         finally
         {
