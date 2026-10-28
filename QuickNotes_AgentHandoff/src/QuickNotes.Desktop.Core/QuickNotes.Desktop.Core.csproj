@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\QuickNotes.Domain\QuickNotes.Domain.csproj" />
+    <ProjectReference Include="..\QuickNotes.Application\QuickNotes.Application.csproj" />
+    <ProjectReference Include="..\QuickNotes.Infrastructure.Sqlite\QuickNotes.Infrastructure.Sqlite.csproj" />
+    <ProjectReference Include="..\QuickNotes.Infrastructure.Drafts\QuickNotes.Infrastructure.Drafts.csproj" />
+    <ProjectReference Include="..\QuickNotes.Infrastructure.Backup\QuickNotes.Infrastructure.Backup.csproj" />
+  </ItemGroup>
+
+</Project>
