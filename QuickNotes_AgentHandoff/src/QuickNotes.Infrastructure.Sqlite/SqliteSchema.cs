@@ -152,7 +152,11 @@ public sealed class SqliteSchema
 
         await ExecuteAsync(connection, transaction, VersionTwoDdl, cancellationToken);
         await SeedSystemCategoryAsync(connection, transaction, cancellationToken);
-        await SeedDatabaseMetaAsync(connection, transaction, cancellationToken);
+        await SeedDatabaseMetaAsync(
+            connection,
+            transaction,
+            changeSequence: 0,
+            cancellationToken);
         await SeedApplicationSettingsAsync(connection, transaction, cancellationToken);
 
         await using (var command = connection.CreateCommand())
@@ -182,22 +186,28 @@ public sealed class SqliteSchema
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static async Task SeedDatabaseMetaAsync(
+    // Shared with SqliteSchemaMigrator so the v1 upgrade seeds the same
+    // database_meta/app_settings rows as a freshly created v2 database.
+    internal static async Task<Guid> SeedDatabaseMetaAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
+        long changeSequence,
         CancellationToken cancellationToken)
     {
+        var databaseId = Guid.NewGuid();
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
             INSERT INTO database_meta (id, database_id, change_sequence)
-            VALUES (1, $database_id, 0);
+            VALUES (1, $database_id, $change_sequence);
             """;
-        command.Parameters.AddWithValue("$database_id", Guid.NewGuid().ToString("D"));
+        command.Parameters.AddWithValue("$database_id", databaseId.ToString("D"));
+        command.Parameters.AddWithValue("$change_sequence", changeSequence);
         await command.ExecuteNonQueryAsync(cancellationToken);
+        return databaseId;
     }
 
-    private static async Task SeedApplicationSettingsAsync(
+    internal static async Task SeedApplicationSettingsAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
         CancellationToken cancellationToken)

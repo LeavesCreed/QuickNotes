@@ -31,6 +31,32 @@ public sealed class DesktopApplicationHostTests
     }
 
     [Fact]
+    public async Task Start_WhenV1Database_MigratesToV2AndKeepsProtectionSnapshot()
+    {
+        using var temporary = new TestTemporaryDirectory();
+        var paths = DesktopPaths.Create(temporary.RootPath);
+        await SchemaMigrationTestDatabase.CreateVersionOneAsync(paths.DatabasePath);
+        await new ApplicationStateStore(paths.StatePath).WriteAsync(
+            CreateReadyState(schemaVersion: 1));
+        await using var host = CreateHost(temporary.RootPath);
+
+        var result = await host.StartAsync();
+
+        Assert.True(result.CanShowWindow);
+        Assert.Equal(StartupMode.Ready, result.Assessment!.Mode);
+        Assert.Equal(2, result.Assessment.DatabaseInfo!.SchemaVersion);
+        Assert.Equal(2, await SchemaMigrationTestDatabase.ReadUserVersionAsync(paths.DatabasePath));
+        var protectionSnapshot = Assert.Single(
+            Directory.GetFiles(paths.MigrationProtectionDirectory, "*.db"));
+        Assert.Matches(
+            @"^notes-v1-\d{8}-\d{6}-\d{3}\.db$",
+            Path.GetFileName(protectionSnapshot));
+        var state = await new ApplicationStateStore(paths.StatePath).ReadAsync();
+        Assert.Equal(2, state.State!.SchemaVersion);
+        Assert.NotNull(host.EditingServices);
+    }
+
+    [Fact]
     public async Task Start_WhenDatabaseMissing_ReturnsNeedsRecovery()
     {
         using var temporary = new TestTemporaryDirectory();
@@ -194,12 +220,12 @@ public sealed class DesktopApplicationHostTests
             new DesktopStartupOptions { DataRoot = dataRoot },
             new TestTimeProvider(Now));
 
-    private static ApplicationState CreateReadyState() => new()
+    private static ApplicationState CreateReadyState(int schemaVersion = 2) => new()
     {
         FormatVersion = ApplicationState.CurrentFormatVersion,
         InstallationId = Guid.NewGuid(),
         InitializationStatus = ApplicationInitializationStatus.Ready,
-        SchemaVersion = 2,
+        SchemaVersion = schemaVersion,
         LastStartupUtc = Now
     };
 

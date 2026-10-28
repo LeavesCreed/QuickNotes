@@ -1,5 +1,6 @@
 using QuickNotes.Application;
 using QuickNotes.Desktop.Diagnostics;
+using QuickNotes.Desktop.Migration;
 using QuickNotes.Desktop.Paths;
 using QuickNotes.Desktop.State;
 
@@ -14,6 +15,7 @@ public sealed class StartupCoordinator
     private readonly IRestoreJournalStore _journalStore;
     private readonly StartupArtifactScanner _artifactScanner;
     private readonly IRestoreStore _restoreStore;
+    private readonly ISchemaMigrationService _migration;
     private readonly Func<CancellationToken, Task> _initializeSchema;
     private readonly DiagnosticLog _log;
     private readonly TimeProvider _timeProvider;
@@ -24,6 +26,7 @@ public sealed class StartupCoordinator
         IRestoreJournalStore journalStore,
         StartupArtifactScanner artifactScanner,
         IRestoreStore restoreStore,
+        ISchemaMigrationService migration,
         Func<CancellationToken, Task> initializeSchema,
         DiagnosticLog log,
         TimeProvider? timeProvider = null)
@@ -33,6 +36,7 @@ public sealed class StartupCoordinator
         _journalStore = journalStore ?? throw new ArgumentNullException(nameof(journalStore));
         _artifactScanner = artifactScanner ?? throw new ArgumentNullException(nameof(artifactScanner));
         _restoreStore = restoreStore ?? throw new ArgumentNullException(nameof(restoreStore));
+        _migration = migration ?? throw new ArgumentNullException(nameof(migration));
         _initializeSchema = initializeSchema ?? throw new ArgumentNullException(nameof(initializeSchema));
         _log = log ?? throw new ArgumentNullException(nameof(log));
         _timeProvider = timeProvider ?? TimeProvider.System;
@@ -156,6 +160,44 @@ public sealed class StartupCoordinator
             var databaseInfo = await _restoreStore
                 .PrepareCurrentAsync(_paths.DatabasePath, cancellationToken)
                 .ConfigureAwait(false);
+            if (databaseInfo.SchemaVersion is 1 or SupportedSchemaVersion)
+            {
+                var migration = databaseInfo.SchemaVersion == 1
+                    ? await _migration
+                        .EnsureCurrentAsync(databaseInfo.SchemaVersion, cancellationToken)
+                        .ConfigureAwait(false)
+                    : SchemaMigrationResult.AlreadyCurrent(databaseInfo.SchemaVersion);
+
+                if (migration.Status == SchemaMigrationStatus.Failed)
+                {
+                    _log.TryWrite("ERROR", "startup", "schema migration failed", migration.ErrorCode);
+                    return Assessment(
+                        StartupMode.NeedsRecovery,
+                        StartupReason.SchemaMigrationFailed,
+                        "The database schema migration failed; the original database and protection snapshot were preserved.",
+                        errorCode: migration.ErrorCode,
+                        state: state,
+                        databaseInfo: databaseInfo,
+                        artifacts: artifacts);
+                }
+
+                if (migration.Status == SchemaMigrationStatus.Unsupported)
+                {
+                    return Assessment(
+                        StartupMode.NeedsRecovery,
+                        StartupReason.SchemaUnsupported,
+                        "The database schema version is not supported.",
+                        errorCode: migration.ErrorCode ?? $"schema={databaseInfo.SchemaVersion}",
+                        state: state,
+                        databaseInfo: databaseInfo,
+                        artifacts: artifacts);
+                }
+
+                databaseInfo = await _restoreStore
+                    .InspectAsync(_paths.DatabasePath, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             if (databaseInfo.SchemaVersion != SupportedSchemaVersion)
             {
                 return Assessment(
@@ -168,12 +210,14 @@ public sealed class StartupCoordinator
                     artifacts: artifacts);
             }
 
+            var updatedState = state with
+            {
+                SchemaVersion = (int)databaseInfo.SchemaVersion,
+                LastStartupUtc = now
+            };
             try
             {
-                await _stateStore.WriteAsync(
-                        state with { LastStartupUtc = now },
-                        cancellationToken)
-                    .ConfigureAwait(false);
+                await _stateStore.WriteAsync(updatedState, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception exception) when (exception is
                 IOException or UnauthorizedAccessException or ArgumentException)
@@ -181,7 +225,7 @@ public sealed class StartupCoordinator
                 _log.TryWrite(
                     "WARN",
                     "startup",
-                    "last startup time could not be persisted",
+                    "startup state could not be persisted",
                     exception.GetType().Name);
             }
 
@@ -190,7 +234,7 @@ public sealed class StartupCoordinator
                 StartupMode.Ready,
                 StartupReason.None,
                 "The database is ready.",
-                state: state,
+                state: updatedState,
                 databaseInfo: databaseInfo,
                 artifacts: artifacts);
         }

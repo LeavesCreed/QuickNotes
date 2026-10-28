@@ -1,5 +1,6 @@
 using QuickNotes.Application;
 using QuickNotes.Desktop.Diagnostics;
+using QuickNotes.Desktop.Migration;
 using QuickNotes.Desktop.Paths;
 using QuickNotes.Desktop.Recovery;
 using QuickNotes.Desktop.Startup;
@@ -305,22 +306,125 @@ public sealed class StartupCoordinatorTests
         Assert.False(File.Exists(paths.DatabasePath));
     }
 
+    [Fact]
+    public async Task MigratesV1_ToReadyV2_AndUpdatesState()
+    {
+        using var temporary = new TestTemporaryDirectory();
+        var paths = DesktopPaths.Create(temporary.RootPath);
+        var stateStore = CreateStateStore(paths);
+        await SchemaMigrationTestDatabase.CreateVersionOneAsync(paths.DatabasePath);
+        await stateStore.WriteAsync(CreateReadyState(schemaVersion: 1));
+
+        var result = await CreateCoordinator(paths, stateStore, CreateJournalStore(paths)).StartAsync();
+
+        Assert.Equal(StartupMode.Ready, result.Mode);
+        Assert.Equal(StartupReason.None, result.Reason);
+        Assert.True(result.CanEnterNormalUse);
+        Assert.Equal(2, result.DatabaseInfo!.SchemaVersion);
+        Assert.Equal(2, await SchemaMigrationTestDatabase.ReadUserVersionAsync(paths.DatabasePath));
+        Assert.Equal(
+            1,
+            await SchemaMigrationTestDatabase.ScalarLongAsync(
+                paths.DatabasePath,
+                "SELECT COUNT(*) FROM database_meta;"));
+        var state = await stateStore.ReadAsync();
+        Assert.Equal(ApplicationStateReadStatus.Found, state.Status);
+        Assert.Equal(2, state.State!.SchemaVersion);
+        Assert.Equal(Now, state.State.LastStartupUtc);
+        var protectionSnapshot = Assert.Single(
+            Directory.GetFiles(paths.MigrationProtectionDirectory, "*.db"));
+        Assert.Matches(
+            @"^notes-v1-\d{8}-\d{6}-\d{3}\.db$",
+            Path.GetFileName(protectionSnapshot));
+        var inspected = await new SqliteRestoreStore().InspectAsync(protectionSnapshot);
+        Assert.Equal(1, inspected.SchemaVersion);
+    }
+
+    [Fact]
+    public async Task MigrationFailure_NeedsRecovery_KeepsV1Database()
+    {
+        using var temporary = new TestTemporaryDirectory();
+        var paths = DesktopPaths.Create(temporary.RootPath);
+        var stateStore = CreateStateStore(paths);
+        await SchemaMigrationTestDatabase.CreateVersionOneAsync(paths.DatabasePath);
+        await stateStore.WriteAsync(CreateReadyState(schemaVersion: 1));
+        var time = new TestTimeProvider(Now);
+        var migration = new SchemaMigrationService(
+            paths,
+            new ThrowingSchemaMigrator(),
+            new SqliteRestoreStore(),
+            new DiagnosticLog(paths.LogDirectory, time),
+            time);
+
+        var result = await CreateCoordinator(
+                paths,
+                stateStore,
+                CreateJournalStore(paths),
+                migration: migration)
+            .StartAsync();
+
+        Assert.Equal(StartupMode.NeedsRecovery, result.Mode);
+        Assert.Equal(StartupReason.SchemaMigrationFailed, result.Reason);
+        Assert.Equal("migration_failed", result.ErrorCode);
+        Assert.False(result.CanEnterNormalUse);
+        Assert.Equal(1, result.DatabaseInfo!.SchemaVersion);
+        Assert.Equal(1, await SchemaMigrationTestDatabase.ReadUserVersionAsync(paths.DatabasePath));
+        Assert.Equal(
+            0,
+            await SchemaMigrationTestDatabase.ScalarLongAsync(
+                paths.DatabasePath,
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('database_meta', 'app_settings');"));
+        var state = await stateStore.ReadAsync();
+        Assert.Equal(ApplicationInitializationStatus.Ready, state.State!.InitializationStatus);
+        Assert.Equal(1, state.State.SchemaVersion);
+        Assert.Single(Directory.GetFiles(paths.MigrationProtectionDirectory, "*.db"));
+    }
+
+    [Fact]
+    public async Task FutureSchema_NeedsRecovery_SchemaUnsupported_DoesNotModify()
+    {
+        using var temporary = new TestTemporaryDirectory();
+        var paths = DesktopPaths.Create(temporary.RootPath);
+        var stateStore = CreateStateStore(paths);
+        await CreateDatabaseAsync(paths);
+        await SchemaMigrationTestDatabase.ExecuteAsync(paths.DatabasePath, "PRAGMA user_version=3;");
+        await stateStore.WriteAsync(CreateReadyState(schemaVersion: 3));
+
+        var result = await CreateCoordinator(paths, stateStore, CreateJournalStore(paths)).StartAsync();
+
+        Assert.Equal(StartupMode.NeedsRecovery, result.Mode);
+        Assert.Equal(StartupReason.SchemaUnsupported, result.Reason);
+        Assert.Equal("schema=3", result.ErrorCode);
+        Assert.Equal(3, await SchemaMigrationTestDatabase.ReadUserVersionAsync(paths.DatabasePath));
+        Assert.False(Directory.Exists(paths.MigrationProtectionDirectory));
+    }
+
     private static StartupCoordinator CreateCoordinator(
         DesktopPaths paths,
         ApplicationStateStore stateStore,
         IRestoreJournalStore journalStore,
-        Func<CancellationToken, Task>? initializeSchema = null)
+        Func<CancellationToken, Task>? initializeSchema = null,
+        ISchemaMigrationService? migration = null)
     {
         var time = new TestTimeProvider(Now);
+        var log = new DiagnosticLog(paths.LogDirectory, time);
+        var restoreStore = new SqliteRestoreStore();
+        migration ??= new SchemaMigrationService(
+            paths,
+            new SqliteSchemaMigrator(),
+            restoreStore,
+            log,
+            time);
         return new StartupCoordinator(
             paths,
             stateStore,
             journalStore,
             new StartupArtifactScanner(paths),
-            new SqliteRestoreStore(),
+            restoreStore,
+            migration,
             initializeSchema ?? (ct => new SqliteSchema(
                 new SqliteConnectionFactory(paths.DatabasePath)).InitializeAsync(ct)),
-            new DiagnosticLog(paths.LogDirectory, time),
+            log,
             time);
     }
 
@@ -330,12 +434,12 @@ public sealed class StartupCoordinatorTests
     private static FileRestoreJournalStore CreateJournalStore(DesktopPaths paths) =>
         new(paths.RestoreJournalPath);
 
-    private static ApplicationState CreateReadyState() => new()
+    private static ApplicationState CreateReadyState(int schemaVersion = 2) => new()
     {
         FormatVersion = ApplicationState.CurrentFormatVersion,
         InstallationId = Guid.NewGuid(),
         InitializationStatus = ApplicationInitializationStatus.Ready,
-        SchemaVersion = 2,
+        SchemaVersion = schemaVersion,
         LastStartupUtc = Now
     };
 

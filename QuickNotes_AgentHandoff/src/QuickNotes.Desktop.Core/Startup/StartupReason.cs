@@ -7,6 +7,7 @@ public enum StartupReason
     DatabaseMissing,
     DatabaseCorrupt,
     SchemaUnsupported,
+    SchemaMigrationFailed,
     StateMissingWithDatabase,
     StateInvalid,
     InitializationIncomplete,

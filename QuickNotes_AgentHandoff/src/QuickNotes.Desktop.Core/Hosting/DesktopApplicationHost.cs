@@ -1,6 +1,7 @@
 using QuickNotes.Application;
 using QuickNotes.Desktop.Diagnostics;
 using QuickNotes.Desktop.Editing;
+using QuickNotes.Desktop.Migration;
 using QuickNotes.Desktop.Paths;
 using QuickNotes.Desktop.Recovery;
 using QuickNotes.Desktop.SingleInstance;
@@ -97,12 +98,20 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
 
         _stateStore = new ApplicationStateStore(_paths.StatePath);
         _journalStore = new FileRestoreJournalStore(_paths.RestoreJournalPath);
+        var restoreStore = new SqliteRestoreStore();
+        var migrationService = new SchemaMigrationService(
+            _paths,
+            new SqliteSchemaMigrator(),
+            restoreStore,
+            _log,
+            _timeProvider);
         _startupCoordinator = new StartupCoordinator(
             _paths,
             _stateStore,
             _journalStore,
             new StartupArtifactScanner(_paths, _options.BackupDirectory),
-            new SqliteRestoreStore(),
+            restoreStore,
+            migrationService,
             token => new SqliteSchema(
                 new SqliteConnectionFactory(_paths.DatabasePath)).InitializeAsync(token),
             _log,
@@ -113,7 +122,7 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
         _rebuilder = new MissingDatabaseRebuilder(
             _paths,
             new BackupPackageVerifier(),
-            new SqliteRestoreStore(),
+            restoreStore,
             _stateStore,
             _log,
             _timeProvider);

@@ -71,6 +71,26 @@ public sealed class StartupArtifactScannerTests
     }
 
     [Fact]
+    public void Scan_MigrationProtectionSnapshot_IsReportedAndRetained()
+    {
+        using var temporary = new TestTemporaryDirectory();
+        var paths = DesktopPaths.Create(temporary.RootPath);
+        paths.EnsureDirectories();
+        Directory.CreateDirectory(paths.MigrationProtectionDirectory);
+        var snapshotPath = Path.Combine(
+            paths.MigrationProtectionDirectory,
+            "notes-v1-20261028-093000-000.db");
+        File.WriteAllText(snapshotPath, "v1 snapshot");
+
+        var inventory = new StartupArtifactScanner(paths).Scan();
+
+        var artifact = Assert.Single(inventory.Artifacts);
+        Assert.Equal(StartupArtifactKind.MigrationProtectionSnapshot, artifact.Kind);
+        Assert.False(artifact.IsDirectory);
+        Assert.True(File.Exists(snapshotPath));
+    }
+
+    [Fact]
     public void Scan_BackupTempsAndProtectionSnapshot_AreReported()
     {
         using var temporary = new TestTemporaryDirectory();
