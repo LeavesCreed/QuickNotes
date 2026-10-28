@@ -90,6 +90,25 @@ public sealed class BackupCoordinatorTests
     }
 
     [Fact]
+    public async Task CreateAsync_DailyType_IsAccepted()
+    {
+        using var temporary = new UnitTemporaryDirectory();
+        var snapshots = new FakeBackupSnapshotProvider();
+        var packages = new FakeBackupPackageStore();
+        var coordinator = CreateCoordinator(snapshots, packages);
+
+        var result = await coordinator.CreateAsync(new BackupRequest
+        {
+            BackupDirectory = temporary.RootPath,
+            Type = BackupType.Daily
+        });
+
+        Assert.Equal(BackupStatus.Succeeded, result.Status);
+        Assert.Equal(BackupType.Daily, result.Manifest!.BackupType);
+        Assert.Equal(BackupType.Daily, packages.LastRequest!.Type);
+    }
+
+    [Fact]
     public async Task CreateAsync_MissingDirectory_ReturnsDestinationUnavailable()
     {
         using var temporary = new UnitTemporaryDirectory();

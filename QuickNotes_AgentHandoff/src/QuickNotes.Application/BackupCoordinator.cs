@@ -136,12 +136,12 @@ public sealed class BackupCoordinator : IBackupCoordinator
                 durationMilliseconds: 0);
         }
 
-        if (request.Type != BackupType.Manual)
+        if (request.Type is not (BackupType.Manual or BackupType.Daily))
         {
             return Failure(
                 BackupStatus.ValidationFailed,
                 BackupErrorCode.ValidationFailed,
-                "Only manual backups are supported.",
+                "Only manual and daily backups are supported.",
                 isRetryable: false,
                 diagnostics: "unsupported_backup_type",
                 durationMilliseconds: 0);

@@ -112,6 +112,73 @@ public sealed class BackupPackageVerifier
         }
     }
 
+    public async Task<BackupManifest> InspectAsync(
+        string packagePath,
+        bool verifyDatabaseHash = true,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(packagePath))
+        {
+            throw new ArgumentException("Package path must not be empty.", nameof(packagePath));
+        }
+
+        if (!File.Exists(packagePath))
+        {
+            throw Failure("The backup package does not exist.");
+        }
+
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            using var archive = OpenArchive(packagePath);
+            var (manifestEntry, databaseEntry) = FindEntries(archive);
+            var manifest = await ReadManifestAsync(manifestEntry, cancellationToken);
+            if (manifest.DatabaseSizeBytes > _maxDatabaseBytes)
+            {
+                throw Failure("The packaged database exceeds the verification size limit.");
+            }
+
+            if (!verifyDatabaseHash)
+            {
+                if (databaseEntry.Length != manifest.DatabaseSizeBytes)
+                {
+                    throw Failure("The database entry size does not match the manifest.");
+                }
+
+                return manifest;
+            }
+
+            var (size, sha256) = await HashEntryAsync(
+                databaseEntry,
+                _maxDatabaseBytes,
+                cancellationToken);
+            if (size != manifest.DatabaseSizeBytes)
+            {
+                throw Failure("The database entry size does not match the manifest.");
+            }
+
+            if (!string.Equals(sha256, manifest.DatabaseSha256, StringComparison.Ordinal))
+            {
+                throw Failure("The database entry hash does not match the manifest.");
+            }
+
+            return manifest;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (BackupException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is
+            InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            throw Failure("The backup package could not be inspected.", exception);
+        }
+    }
+
     private static ZipArchive OpenArchive(string packagePath)
     {
         try
@@ -178,9 +245,6 @@ public sealed class BackupPackageVerifier
         long maxBytes,
         CancellationToken cancellationToken)
     {
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        long size = 0;
-        await using var input = entry.Open();
         await using var output = new FileStream(
             destinationPath,
             FileMode.CreateNew,
@@ -188,6 +252,30 @@ public sealed class BackupPackageVerifier
             FileShare.None,
             BufferSize,
             FileOptions.Asynchronous);
+        var result = await HashEntryCoreAsync(
+            entry,
+            output,
+            maxBytes,
+            cancellationToken);
+        await output.FlushAsync(cancellationToken);
+        return result;
+    }
+
+    private static Task<(long Size, string Sha256)> HashEntryAsync(
+        ZipArchiveEntry entry,
+        long maxBytes,
+        CancellationToken cancellationToken) =>
+        HashEntryCoreAsync(entry, destination: null, maxBytes, cancellationToken);
+
+    private static async Task<(long Size, string Sha256)> HashEntryCoreAsync(
+        ZipArchiveEntry entry,
+        Stream? destination,
+        long maxBytes,
+        CancellationToken cancellationToken)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        long size = 0;
+        await using var input = entry.Open();
         var buffer = new byte[BufferSize];
         int read;
         while ((read = await input.ReadAsync(buffer, cancellationToken)) > 0)
@@ -198,11 +286,14 @@ public sealed class BackupPackageVerifier
             }
 
             hash.AppendData(buffer, 0, read);
-            await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+            if (destination is not null)
+            {
+                await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+            }
+
             size += read;
         }
 
-        await output.FlushAsync(cancellationToken);
         return (size, Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant());
     }
 
