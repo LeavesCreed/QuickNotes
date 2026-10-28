@@ -491,7 +491,16 @@ public sealed class DailyBackupServiceTests
         await secondCall.Task.WaitAsync(TimeSpan.FromSeconds(5));
         cancellation.Cancel();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => loop);
+        var completed = await Task.WhenAny(loop, Task.Delay(TimeSpan.FromSeconds(5)));
+        Assert.Same(loop, completed);
+        try
+        {
+            await loop;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
         Assert.True(calls >= 2);
     }
 

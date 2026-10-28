@@ -11,18 +11,21 @@ public sealed class NoteSaveCoordinator : INoteSaveCoordinator
     private readonly INoteDraftStore _drafts;
     private readonly SaveRetryOptions _retryOptions;
     private readonly ILogger<NoteSaveCoordinator> _logger;
+    private readonly IDatabaseWriteGate _writeGate;
 
     public NoteSaveCoordinator(
         INoteRepository notes,
         INoteDraftStore drafts,
         SaveRetryOptions? retryOptions = null,
-        ILogger<NoteSaveCoordinator>? logger = null)
+        ILogger<NoteSaveCoordinator>? logger = null,
+        IDatabaseWriteGate? writeGate = null)
     {
         _notes = notes ?? throw new ArgumentNullException(nameof(notes));
         _drafts = drafts ?? throw new ArgumentNullException(nameof(drafts));
         _retryOptions = retryOptions ?? new SaveRetryOptions();
         ValidateRetryOptions(_retryOptions);
         _logger = logger ?? NullLogger<NoteSaveCoordinator>.Instance;
+        _writeGate = writeGate ?? NoopDatabaseWriteGate.Instance;
     }
 
     public async Task<SaveResult> CreateAsync(
@@ -107,6 +110,47 @@ public sealed class NoteSaveCoordinator : INoteSaveCoordinator
     }
 
     private async Task<SaveResult> SaveAsync(
+        string operation,
+        Guid noteId,
+        Guid? draftId,
+        IReadOnlyCollection<Guid>? draftTagIds,
+        Func<CancellationToken, Task<Note>> write,
+        Func<SaveOutcomeUnknownException, Task<SaveResult>> verifyCommit,
+        CancellationToken cancellationToken)
+    {
+        IDatabaseWriteLease lease;
+        try
+        {
+            lease = await _writeGate.EnterWriteAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (DatabaseWriteBlockedException)
+        {
+            return Failure(
+                SaveStatus.StorageUnavailable,
+                noteId,
+                draftId,
+                0,
+                new SaveError(
+                    SaveErrorCode.StorageUnavailable,
+                    "Database writes are blocked after a restore failure.",
+                    false,
+                    "database_writes_blocked"));
+        }
+
+        await using (lease)
+        {
+            return await SaveCoreAsync(
+                operation,
+                noteId,
+                draftId,
+                draftTagIds,
+                write,
+                verifyCommit,
+                cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<SaveResult> SaveCoreAsync(
         string operation,
         Guid noteId,
         Guid? draftId,
