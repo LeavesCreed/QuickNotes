@@ -35,7 +35,8 @@ public sealed class MissingDatabaseRebuilder
     public async Task<MissingDatabaseRebuildResult> RebuildAsync(
         string packagePath,
         bool quarantineCorruptCurrent,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool recoverBlockedWrites = false)
     {
         if (string.IsNullOrWhiteSpace(packagePath) || !File.Exists(packagePath))
         {
@@ -55,13 +56,19 @@ public sealed class MissingDatabaseRebuilder
             return Failed("state_not_ready", "The application is not initialized.");
         }
 
-        if (state.WritesBlocked)
+        if (recoverBlockedWrites && !state.WritesBlocked)
+        {
+            return Failed("writes_not_blocked", "Writes are not currently blocked.");
+        }
+
+        if (state.WritesBlocked && !recoverBlockedWrites)
         {
             return Failed(
                 "writes_blocked",
-                "Database writes are blocked; use the recovery diagnostics path first.");
+                "Database writes are blocked; explicit verified-backup recovery is required.");
         }
 
+        var recoveringBlockedWrites = state.WritesBlocked && recoverBlockedWrites;
         if (File.Exists(_paths.DatabasePath + "-journal")
             || File.Exists(_paths.DatabasePath + "-wal")
             || File.Exists(_paths.DatabasePath + "-shm"))
@@ -86,9 +93,12 @@ public sealed class MissingDatabaseRebuilder
                         "The current database schema is not supported.");
                 }
 
-                return Failed(
-                    "current_database_present",
-                    "A valid current database exists; use the normal restore path.");
+                if (!recoveringBlockedWrites)
+                {
+                    return Failed(
+                        "current_database_present",
+                        "A valid current database exists; use the normal restore path.");
+                }
             }
             catch (OperationCanceledException)
             {
@@ -96,7 +106,7 @@ public sealed class MissingDatabaseRebuilder
             }
             catch (RestoreException exception)
             {
-                if (!quarantineCorruptCurrent)
+                if (!quarantineCorruptCurrent && !recoveringBlockedWrites)
                 {
                     _log.TryWrite(
                         "WARN",
@@ -191,6 +201,9 @@ public sealed class MissingDatabaseRebuilder
                         state with
                         {
                             LastStartupUtc = now,
+                            WritesBlocked = false,
+                            WriteBlockReason = null,
+                            WriteBlockedAtUtc = null,
                             RecoverySourceSha256 = manifest.DatabaseSha256,
                             RecoveryProtectionSnapshotCreated = false,
                             LastRecoveryAtUtc = now

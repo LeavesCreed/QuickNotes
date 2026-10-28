@@ -16,8 +16,8 @@ B5 的恢复只在当前库存在时工作，`BlockWrites()` 仅内存；重启/
 3. **启动模式。** `FirstRunInitialized`、`Ready`、`NeedsRecovery`、`WriteBlocked`、`ReadOnlyDiagnostic`；原因区分数据库缺失/损坏/schema 不支持、状态缺失但库存在、状态损坏、初始化未完成、WAL sidecar、持久阻断、恢复日志未完成/损坏。只有 Ready 才准备当前库并进入正常使用；其他模式只读诊断。
 4. **恢复日志。** `recovery-journal.json`（Application 契约，C1 读取；C4 在真实恢复阶段写入）：`restoreId`、`stage`（Staging/ProtectionCreated/Switching/Verifying/Rollback/Completed/Failed）、当前库/staging/保护/回退路径、起止时间。未完成阶段→NeedsRecovery；损坏/未知→ReadOnlyDiagnostic；保留相关路径，不自动清理。
 5. **恢复产物策略。** 扫描 `.quicknotes-restore-*`、回退库、保护快照、`.quicknotes-tmp-*`、`.quicknotes-package-*.tmp`；C1 **只识别、默认全部保留**。清理必须证明归属、引用关系、当前库和恢复状态；C1 不自动删除，避免误删唯一恢复点；清理能力留 C6/C7/显式用户操作。
-6. **持久写入阻断。** `PersistentDatabaseWriteGate` 包装 `DatabaseWriteGate`；`BlockWrites()` 先原子写 `writesBlocked=true` + 原因/时间，再置内存阻断。状态写失败记录错误但仍在内存阻断。启动读到阻断状态进入 `WriteBlocked`，不自动清除；解除必须经过后续验证/恢复入口（C4/C6）。
-7. **缺失库重建。** 当前库缺失且用户选择已验证备份时：同卷 staging 提取 + B3 完整校验 + schema/counts/完整性/外键 → `File.Move` 发布；当前库损坏且用户确认时先隔离为 quarantine，再用 `File.Replace` 发布；发布后校验 SHA-256/manifest/schema/counts。无当前库时记录“未创建保护快照”，不得伪造成功。失败保留 staging/quarantine，不报成功。
+6. **持久写入阻断。** `PersistentDatabaseWriteGate` 包装 `DatabaseWriteGate`；`BlockWrites()` 先原子写 `writesBlocked=true` + 原因/时间，再置内存阻断。状态写失败记录错误但仍在内存阻断。启动读到阻断状态进入 `WriteBlocked`，不自动清除。解除只能通过显式恢复入口：选择已验证备份，隔离当前库，完整校验并发布，写 `Ready` 且清除阻断；重启本身永不解除。
+7. **缺失库/阻断恢复。** 当前库缺失、损坏或写入阻断且用户选择已验证备份时：同卷 staging 提取 + B3 完整校验 + schema/counts/完整性/外键 → 当前库缺失用 `File.Move` 发布，当前库存在则隔离为 quarantine 后用 `File.Replace` 发布；发布后校验 SHA-256/manifest/schema/counts；成功后写 `Ready`、恢复来源哈希、`ProtectionSnapshotCreated=false`，并在阻断恢复时清除 `writesBlocked`。无当前库时记录“未创建保护快照”，不得伪造成功。失败保留 staging/quarantine，不报成功。
 8. **不做。** C1 不自动选择恢复来源、不自动覆盖损坏库、不清理 staging/回退/保护、不清除阻断、不实现 schema v2/真实恢复 UI。
 
 ## 后果

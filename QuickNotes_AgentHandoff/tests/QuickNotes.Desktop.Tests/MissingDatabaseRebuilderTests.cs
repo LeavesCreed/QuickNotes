@@ -117,6 +117,33 @@ public sealed class MissingDatabaseRebuilderTests
     }
 
     [Fact]
+    public async Task Rebuild_BlockedWrites_WithVerifiedBackup_ClearsBlockAfterVerification()
+    {
+        using var temporary = new TestTemporaryDirectory();
+        var paths = DesktopPaths.Create(Path.Combine(temporary.RootPath, "data"));
+        await CreateDatabaseAsync(paths);
+        var stateStore = new ApplicationStateStore(paths.StatePath);
+        await stateStore.WriteAsync(
+            CreateReadyState().MarkWritesBlocked("restore_rollback_failed", Now));
+        var package = await CreatePackageAsync(temporary);
+        var rebuilder = CreateRebuilder(paths, stateStore);
+
+        var result = await rebuilder.RebuildAsync(
+            package.PackagePath,
+            quarantineCorruptCurrent: true,
+            recoverBlockedWrites: true);
+
+        Assert.Equal(MissingDatabaseRebuildStatus.Succeeded, result.Status);
+        Assert.NotNull(result.QuarantinePath);
+        Assert.True(File.Exists(result.QuarantinePath));
+        Assert.Equal(1, result.RestoredCounts!.ActiveNotes);
+        var state = await stateStore.ReadAsync();
+        Assert.False(state.State!.WritesBlocked);
+        Assert.Null(state.State.WriteBlockReason);
+        Assert.Equal(package.Manifest.DatabaseSha256, state.State.RecoverySourceSha256);
+    }
+
+    [Fact]
     public async Task Rebuild_PostPublishVerificationFailure_DoesNotReportSuccess()
     {
         using var temporary = new TestTemporaryDirectory();
