@@ -31,6 +31,7 @@ public partial class StartupWindow : Window
             ReasonText.Text = "正在检查数据目录和恢复状态。";
             DetailsText.Text = string.Empty;
             SetButtonsEnabled(false, false, false);
+            OpenWorkspaceButton.IsEnabled = false;
             HintText.Text = string.Empty;
             return;
         }
@@ -60,7 +61,7 @@ public partial class StartupWindow : Window
         HintText.Text = assessment.Mode switch
         {
             StartupMode.FirstRunInitialized or StartupMode.Ready =>
-                "数据层已就绪；编辑功能将在 C2 接入。",
+                "数据层已就绪；可以打开编辑器。",
             StartupMode.WriteBlocked =>
                 "写入已阻断；重启不会自动解除。请保留诊断信息并等待恢复入口处理。",
             StartupMode.NeedsRecovery =>
@@ -68,6 +69,9 @@ public partial class StartupWindow : Window
             _ =>
                 "当前为只读诊断；不会初始化空库或删除现有数据。"
         };
+        OpenWorkspaceButton.IsEnabled = !_busy
+            && assessment.CanEnterNormalUse
+            && _host.EditingServices is not null;
     }
 
     private static string BuildDetails(StartupAssessment assessment)
@@ -248,4 +252,18 @@ public partial class StartupWindow : Window
     }
 
     private void ExitButton_Click(object sender, RoutedEventArgs e) => Close();
+
+    private void OpenWorkspaceButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_host.EditingServices is null)
+        {
+            MessageBox.Show(this, "编辑服务尚未就绪。", "QuickNotes", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var workspace = new WorkspaceWindow(_host);
+        System.Windows.Application.Current.MainWindow = workspace;
+        workspace.Show();
+        Close();
+    }
 }

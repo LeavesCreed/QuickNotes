@@ -54,7 +54,10 @@ public partial class App : System.Windows.Application
             }
 
             _host.ActivationRequested += OnActivationRequested;
-            var window = new StartupWindow(_host);
+            var window = result.Assessment?.CanEnterNormalUse == true
+                && _host.EditingServices is not null
+                ? new WorkspaceWindow(_host)
+                : (Window)new StartupWindow(_host);
             MainWindow = window;
             ShutdownMode = ShutdownMode.OnMainWindowClose;
             window.Show();

@@ -213,7 +213,7 @@ public sealed class NoteEditorSession : IAsyncDisposable
         lock (_sync)
         {
             ThrowIfDisposed();
-            _saveDebounce?.Cancel();
+            CancelQuietly(_saveDebounce);
             _saveDebounce = null;
         }
 
@@ -465,12 +465,14 @@ public sealed class NoteEditorSession : IAsyncDisposable
         var note = await _notes.GetAsync(noteId, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException("The stored note no longer exists.");
         var tagIds = await _notes.GetTagIdsAsync(noteId, cancellationToken).ConfigureAwait(false);
+        string? draftDiscardError = null;
         try
         {
             await _drafts.DeleteAsync(draftId, CancellationToken.None).ConfigureAwait(false);
         }
-        catch (DraftStoreException)
+        catch (DraftStoreException exception)
         {
+            draftDiscardError = exception.ErrorCode;
         }
 
         lock (_sync)
@@ -492,11 +494,15 @@ public sealed class NoteEditorSession : IAsyncDisposable
                 BaseVersion = note.Version
             };
             _saveState = EditorSaveState.Clean;
-            _draftState = DraftProtectionState.NotNeeded;
+            _draftState = draftDiscardError is null
+                ? DraftProtectionState.NotNeeded
+                : DraftProtectionState.Failed;
             _hasPendingChanges = false;
             _conflict = null;
-            _errorCode = null;
-            _message = null;
+            _errorCode = draftDiscardError;
+            _message = draftDiscardError is null
+                ? null
+                : "The previous draft could not be discarded.";
             _draftWindowStartedAt = null;
             _saveWindowStartedAt = null;
         }
@@ -579,12 +585,11 @@ public sealed class NoteEditorSession : IAsyncDisposable
         }
 
         _disposed = true;
-        _draftDebounce?.Cancel();
+        CancelQuietly(_draftDebounce);
         _draftDebounce = null;
-        _saveDebounce?.Cancel();
+        CancelQuietly(_saveDebounce);
         _saveDebounce = null;
         await _lifetime.CancelAsync().ConfigureAwait(false);
-        _lifetime.Dispose();
     }
 
     private void ScheduleDraftLocked()
@@ -594,7 +599,7 @@ public sealed class NoteEditorSession : IAsyncDisposable
             return;
         }
 
-        _draftDebounce?.Cancel();
+        CancelQuietly(_draftDebounce);
         var source = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         _draftDebounce = source;
         var now = _timeProvider.GetUtcNow().ToUniversalTime();
@@ -628,6 +633,10 @@ public sealed class NoteEditorSession : IAsyncDisposable
 
                 RaiseStatusChanged();
             }
+            finally
+            {
+                source.Dispose();
+            }
         });
     }
 
@@ -638,7 +647,7 @@ public sealed class NoteEditorSession : IAsyncDisposable
             return;
         }
 
-        _saveDebounce?.Cancel();
+        CancelQuietly(_saveDebounce);
         var source = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         _saveDebounce = source;
         var now = _timeProvider.GetUtcNow().ToUniversalTime();
@@ -672,6 +681,10 @@ public sealed class NoteEditorSession : IAsyncDisposable
                 }
 
                 RaiseStatusChanged();
+            }
+            finally
+            {
+                source.Dispose();
             }
         });
     }
@@ -874,6 +887,22 @@ public sealed class NoteEditorSession : IAsyncDisposable
     }
 
     private void RaiseStatusChanged() => StatusChanged?.Invoke(this, EventArgs.Empty);
+
+    private static void CancelQuietly(CancellationTokenSource? source)
+    {
+        if (source is null)
+        {
+            return;
+        }
+
+        try
+        {
+            source.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
 
     private void ThrowIfDisposed()
     {

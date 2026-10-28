@@ -141,6 +141,41 @@ public sealed class NoteEditorSessionSaveTests
     }
 
     [Fact]
+    public async Task AutoSave_AfterDebounce_SavesLatestSnapshot()
+    {
+        var notes = new FakeNoteRepository();
+        var drafts = new FakeDraftStore();
+        var saves = new FakeSaveCoordinator();
+        var note = EditorTestData.NewNote(version: 1);
+        notes.Add(note);
+        saves.UpdateHandler = (saving, expectedVersion, tagIds, draftId, _) =>
+        {
+            var updated = saving with { Version = expectedVersion + 1 };
+            notes.Add(updated, tagIds);
+            return Task.FromResult(FakeSaveCoordinator.SavedResult(updated, draftId));
+        };
+        var workspace = new EditorWorkspaceService(
+            notes,
+            saves,
+            drafts,
+            new EditorAutosaveOptions
+            {
+                DraftDebounce = TimeSpan.Zero,
+                DraftMaxDelay = TimeSpan.FromSeconds(1),
+                SaveDebounce = TimeSpan.Zero,
+                SaveMaxDelay = TimeSpan.FromSeconds(1)
+            },
+            new TestTimeProvider(EditorTestData.Timestamp));
+        var session = await workspace.OpenAsync(note.Id);
+
+        session!.ChangeText("title", "autosaved");
+        await WaitUntilAsync(() => saves.UpdateCalls == 1);
+        await WaitUntilAsync(() => session.Status.SaveState == EditorSaveState.Saved);
+
+        Assert.Equal("autosaved", notes.Notes[note.Id].Body);
+    }
+
+    [Fact]
     public async Task Conflict_PreservesLocalSnapshotAndDraft()
     {
         var (workspace, notes, saves, drafts) = CreateWorkspace();
@@ -180,6 +215,29 @@ public sealed class NoteEditorSessionSaveTests
         Assert.Equal("remote", session.Body);
         Assert.Equal(2, session.Status.BaseVersion);
         Assert.Null(session.Conflict);
+    }
+
+    [Fact]
+    public async Task Conflict_Reload_DraftDeleteFailure_KeepsDiagnostic()
+    {
+        var (workspace, notes, saves, drafts) = CreateWorkspace();
+        var note = EditorTestData.NewNote(version: 1, body: "original");
+        notes.Add(note);
+        var session = await workspace.OpenAsync(note.Id);
+        session!.ChangeText("title", "local");
+        saves.UpdateHandler = (_, _, _, draftId, _) => Task.FromResult(ConflictResult(
+            note with { Body = "remote", Version = 2 },
+            draftId));
+        await session.SaveNowAsync();
+        notes.Add(note with { Body = "remote", Title = "remote title", Version = 2 });
+        drafts.FailOnDelete = true;
+
+        await session.ReloadAsync();
+
+        Assert.Equal(EditorSaveState.Clean, session.Status.SaveState);
+        Assert.Equal("remote", session.Body);
+        Assert.Equal(DraftProtectionState.Failed, session.Status.DraftState);
+        Assert.False(string.IsNullOrWhiteSpace(session.Status.ErrorCode));
     }
 
     [Fact]
@@ -345,4 +403,18 @@ public sealed class NoteEditorSessionSaveTests
             false,
             "test")
     };
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        while (!condition())
+        {
+            if (DateTime.UtcNow >= deadline)
+            {
+                throw new TimeoutException("Condition was not reached in time.");
+            }
+
+            await Task.Delay(10);
+        }
+    }
 }

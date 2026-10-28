@@ -1,11 +1,13 @@
 using QuickNotes.Application;
 using QuickNotes.Desktop.Diagnostics;
+using QuickNotes.Desktop.Editing;
 using QuickNotes.Desktop.Paths;
 using QuickNotes.Desktop.Recovery;
 using QuickNotes.Desktop.SingleInstance;
 using QuickNotes.Desktop.Startup;
 using QuickNotes.Desktop.State;
 using QuickNotes.Infrastructure.Backup;
+using QuickNotes.Infrastructure.Drafts;
 using QuickNotes.Infrastructure.Sqlite;
 
 namespace QuickNotes.Desktop.Hosting;
@@ -22,6 +24,7 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
     private StartupCoordinator? _startupCoordinator;
     private MissingDatabaseRebuilder? _rebuilder;
     private PersistentDatabaseWriteGate? _writeGate;
+    private DesktopEditingServices? _editingServices;
     private bool _disposed;
 
     public DesktopApplicationHost(
@@ -41,6 +44,8 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
     public StartupAssessment? Assessment { get; private set; }
 
     public IDatabaseWriteGate? WriteGate => _writeGate;
+
+    public DesktopEditingServices? EditingServices => _editingServices;
 
     public event Action? ActivationRequested;
 
@@ -117,6 +122,7 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
             _log,
             timeProvider: _timeProvider,
             initiallyBlocked: Assessment.State?.WritesBlocked == true);
+        RefreshEditingServices();
 
         return new DesktopStartResult
         {
@@ -135,6 +141,7 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
             .StartAsync(cancellationToken)
             .ConfigureAwait(false);
         UpdateWriteGate();
+        RefreshEditingServices();
         return Assessment;
     }
 
@@ -146,6 +153,7 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
             .RetryInitializationAsync(cancellationToken)
             .ConfigureAwait(false);
         UpdateWriteGate();
+        RefreshEditingServices();
         return Assessment;
     }
 
@@ -169,6 +177,7 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
                 .StartAsync(cancellationToken)
                 .ConfigureAwait(false);
             UpdateWriteGate();
+            RefreshEditingServices();
         }
 
         return result;
@@ -212,5 +221,37 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
             _log,
             timeProvider: _timeProvider,
             initiallyBlocked: Assessment?.State?.WritesBlocked == true);
+    }
+
+    private void RefreshEditingServices()
+    {
+        if (Assessment?.CanEnterNormalUse != true
+            || _paths is null
+            || _writeGate is null)
+        {
+            _editingServices = null;
+            return;
+        }
+
+        var factory = new SqliteConnectionFactory(_paths.DatabasePath);
+        var notes = new SqliteNoteRepository(factory);
+        var drafts = new FileNoteDraftStore(_paths.DraftDirectory);
+        var saves = new NoteSaveCoordinator(
+            notes,
+            drafts,
+            logger: null,
+            writeGate: _writeGate);
+        var workspace = new EditorWorkspaceService(
+            notes,
+            saves,
+            drafts,
+            timeProvider: _timeProvider);
+        var recovery = new DraftRecoveryService(_paths, notes, drafts, workspace);
+        _editingServices = new DesktopEditingServices(
+            notes,
+            drafts,
+            saves,
+            workspace,
+            recovery);
     }
 }

@@ -54,6 +54,11 @@
                     Padding="12,6"
                     Margin="0,0,8,0"
                     Click="RetryButton_Click" />
+            <Button x:Name="OpenWorkspaceButton"
+                    Content="打开编辑器"
+                    Padding="12,6"
+                    Margin="0,0,8,0"
+                    Click="OpenWorkspaceButton_Click" />
             <Button x:Name="ExitButton"
                     Content="退出"
                     Padding="12,6"
