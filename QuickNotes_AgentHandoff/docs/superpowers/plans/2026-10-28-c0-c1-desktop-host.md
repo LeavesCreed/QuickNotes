@@ -257,7 +257,7 @@ git commit -m "feat: 添加桌面数据路径、应用状态与诊断日志"
   - `SingleInstanceGuard(string dataRoot, DiagnosticLog log)`，`StartResult` 为 `Owner/ActivatedExisting/Unresponsive/Error`
   - `event Action? ActivationRequested`
   - `Task<SingleInstanceStartResult> StartAsync(TimeSpan activationTimeout, CancellationToken)`
-  - `Dispose()` 释放 Mutex/管道
+  - `DisposeAsync/Dispose` 释放数据根锁文件/管道；数据根 `.quicknotes-instance.lock` 以 `FileShare.None` 持有
 
 - [ ] **Step 1: 写失败测试**
 
@@ -270,21 +270,18 @@ TwoDifferentDataRoots_DoNotConflict
 
 测试用唯一临时数据根与短超时；先启动 owner，再启动 second；用 `TaskCompletionSource` 等激活事件；finally 释放两个 guard。测试不得访问真实用户目录。
 
-- [ ] **Step 2: 实现 Mutex + Named Pipe**
-
-命名对象由当前用户 SID（获取失败用用户名）+ 规范化数据根 SHA-256 前 16 位派生：
+- [ ] **Step 2: 实现数据根锁文件 + Named Pipe**
 
 ```text
-Local\QuickNotes.Instance.<hash>
-QuickNotes.Activate.<hash>
+锁文件：<dataRoot>\.quicknotes-instance.lock（FileMode.OpenOrCreate, FileShare.None）
+管道：QuickNotes.Activate.<hash>（用户身份 + 数据根 SHA-256 前 16 位）
+StartAsync：
+1. 创建数据根目录；打开锁文件排他句柄；失败（IOException）视为已有实例
+2. 已有实例：连接管道发送 ACTIVATE，成功 -> ActivatedExisting；超时/失败 -> Unresponsive
+3. 成功：持有锁句柄，启动管道服务器，返回 Owner
+4. 任何失败：不打开 DB/草稿/日志写入
+选择锁文件而非 Mutex：Mutex 线程亲和/可递归，异步启动/退出与测试不可靠；OS 释放锁句柄可处理崩溃遗留。
 ```
-
-`StartAsync`：
-
-1. `new Mutex(initiallyOwned: true, name, out createdNew)`。
-2. `createdNew == false`：连接命名管道，发送 `ACTIVATE`，等待 `OK`；成功返回 `ActivatedExisting`；超时/连接失败返回 `Unresponsive`；不打开数据库。
-3. `createdNew == true`：启动单实例管道服务器（单连接循环，收到 `ACTIVATE` 触发事件并回 `OK`），返回 `Owner`。
-4. 任何异常记录日志并返回 `Error`；不得吞掉后继续打开数据。
 
 - [ ] **Step 3: 运行测试**
 
