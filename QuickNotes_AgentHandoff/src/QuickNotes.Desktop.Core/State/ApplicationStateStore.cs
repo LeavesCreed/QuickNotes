@@ -81,8 +81,9 @@ public sealed class ApplicationStateStore
 
             try
             {
-                Validate(read.State.MarkWritesBlocked(reason, now));
-                WriteCore(read.State.MarkWritesBlocked(reason, now));
+                var blocked = read.State.MarkWritesBlocked(reason, now);
+                Validate(blocked);
+                WriteCore(blocked);
             }
             catch (Exception exception) when (exception is
                 IOException or UnauthorizedAccessException or ArgumentException)

@@ -177,11 +177,26 @@ public sealed class MissingDatabaseRebuilder
                 File.Move(stagedPath, _paths.DatabasePath);
             }
 
-            var verified = await VerifyPublishedAsync(
-                    manifest,
-                    stagedInfo,
-                    cancellationToken)
-                .ConfigureAwait(false);
+            (bool IsVerified, string? ErrorCode, RestoreCounts Counts) verified;
+            try
+            {
+                verified = await VerifyPublishedAsync(
+                        manifest,
+                        stagedInfo,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (RestoreException exception)
+            {
+                return await HandlePostPublishFailureAsync(
+                        currentExists,
+                        quarantinePath,
+                        stagingDirectory,
+                        exception.ErrorCode,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             if (!verified.IsVerified)
             {
                 publishedError = verified.ErrorCode;
