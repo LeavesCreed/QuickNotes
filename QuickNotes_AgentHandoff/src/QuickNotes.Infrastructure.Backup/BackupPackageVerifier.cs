@@ -8,7 +8,7 @@ using QuickNotes.Application;
 
 namespace QuickNotes.Infrastructure.Backup;
 
-public sealed class BackupPackageVerifier
+public sealed class BackupPackageVerifier : IBackupPackageExtractor
 {
     public const long DefaultMaxDatabaseBytes = 4L * 1024 * 1024 * 1024;
 
@@ -65,21 +65,74 @@ public sealed class BackupPackageVerifier
             $".quicknotes-verify-{Guid.NewGuid():N}.db");
         try
         {
+            return await ExtractAsync(packagePath, verificationPath, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            TryDelete(verificationPath);
+        }
+    }
+
+    public async Task<BackupManifest> ExtractAsync(
+        string packagePath,
+        string destinationDatabasePath,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(packagePath))
+        {
+            throw new ArgumentException("Package path must not be empty.", nameof(packagePath));
+        }
+
+        if (string.IsNullOrWhiteSpace(destinationDatabasePath))
+        {
+            throw new ArgumentException(
+                "Destination database path must not be empty.",
+                nameof(destinationDatabasePath));
+        }
+
+        if (!File.Exists(packagePath))
+        {
+            throw Failure("The backup package does not exist.");
+        }
+
+        var destinationDirectory = Path.GetDirectoryName(
+            Path.GetFullPath(destinationDatabasePath));
+        if (string.IsNullOrEmpty(destinationDirectory) || !Directory.Exists(destinationDirectory))
+        {
+            throw new BackupException(
+                "extract",
+                BackupErrorCodes.DestinationUnavailable,
+                "The staging directory does not exist.");
+        }
+
+        if (File.Exists(destinationDatabasePath))
+        {
+            throw new BackupException(
+                "extract",
+                BackupErrorCodes.DestinationUnavailable,
+                "The destination database already exists.");
+        }
+
+        try
+        {
             cancellationToken.ThrowIfCancellationRequested();
 
             using var archive = OpenArchive(packagePath);
             var (manifestEntry, databaseEntry) = FindEntries(archive);
-            var manifest = await ReadManifestAsync(manifestEntry, cancellationToken);
+            var manifest = await ReadManifestAsync(manifestEntry, cancellationToken)
+                .ConfigureAwait(false);
             if (manifest.DatabaseSizeBytes > _maxDatabaseBytes)
             {
                 throw Failure("The packaged database exceeds the verification size limit.");
             }
 
             var (size, sha256) = await ExtractAndHashAsync(
-                databaseEntry,
-                verificationPath,
-                _maxDatabaseBytes,
-                cancellationToken);
+                    databaseEntry,
+                    destinationDatabasePath,
+                    _maxDatabaseBytes,
+                    cancellationToken)
+                .ConfigureAwait(false);
             if (size != manifest.DatabaseSizeBytes)
             {
                 throw Failure("The database entry size does not match the manifest.");
@@ -90,25 +143,28 @@ public sealed class BackupPackageVerifier
                 throw Failure("The database entry hash does not match the manifest.");
             }
 
-            await VerifyDatabaseAsync(verificationPath, manifest.SchemaVersion, cancellationToken);
+            await VerifyDatabaseAsync(
+                    destinationDatabasePath,
+                    manifest.SchemaVersion,
+                    cancellationToken)
+                .ConfigureAwait(false);
             return manifest;
         }
         catch (OperationCanceledException)
         {
+            TryDelete(destinationDatabasePath);
             throw;
         }
         catch (BackupException)
         {
+            TryDelete(destinationDatabasePath);
             throw;
         }
         catch (Exception exception) when (exception is
             InvalidDataException or IOException or UnauthorizedAccessException or SqliteException)
         {
-            throw Failure("The backup package could not be verified.", exception);
-        }
-        finally
-        {
-            TryDelete(verificationPath);
+            TryDelete(destinationDatabasePath);
+            throw Failure("The backup package could not be extracted.", exception);
         }
     }
 
