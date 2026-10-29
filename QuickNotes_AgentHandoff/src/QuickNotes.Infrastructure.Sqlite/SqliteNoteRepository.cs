@@ -139,6 +139,102 @@ public sealed class SqliteNoteRepository : INoteRepository
         }
     }
 
+    public async Task<IReadOnlyList<Note>> QueryAsync(
+        NoteQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        const string operation = "query";
+        try
+        {
+            await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
+            await using var command = connection.CreateCommand();
+            var conditions = new List<string>
+            {
+                "(($lifecycle IS NOT NULL AND lifecycle = $lifecycle) OR ($lifecycle IS NULL AND lifecycle = 0) OR ($lifecycle IS NULL AND $include_archived = 1 AND lifecycle = 1))"
+            };
+            command.Parameters.AddWithValue(
+                "$lifecycle",
+                query.Lifecycle is null ? DBNull.Value : (int)query.Lifecycle.Value);
+            command.Parameters.AddWithValue("$include_archived", query.IncludeArchived ? 1 : 0);
+
+            if (query.CategoryId is { } categoryId)
+            {
+                conditions.Add("category_id = $category_id");
+                command.Parameters.AddWithValue(
+                    "$category_id",
+                    SqliteTypeMapping.GuidString(categoryId));
+            }
+
+            if (query.AnyTagIds.Count > 0)
+            {
+                var tagParameters = new List<string>();
+                var index = 0;
+                foreach (var tagId in query.AnyTagIds.Distinct())
+                {
+                    var parameterName = $"$tag_{index++}";
+                    tagParameters.Add(parameterName);
+                    command.Parameters.AddWithValue(
+                        parameterName,
+                        SqliteTypeMapping.GuidString(tagId));
+                }
+
+                conditions.Add($"""
+                    EXISTS (
+                        SELECT 1 FROM note_tags nt
+                        WHERE nt.note_id = notes.id
+                          AND nt.tag_id IN ({string.Join(", ", tagParameters)}))
+                    """);
+            }
+
+            if (!string.IsNullOrWhiteSpace(query.SearchText))
+            {
+                var pattern = $"%{EscapeLike(query.SearchText.Trim())}%";
+                command.Parameters.AddWithValue("$search", pattern);
+                conditions.Add("""
+                    (title LIKE $search ESCAPE '\'
+                     OR body LIKE $search ESCAPE '\'
+                     OR EXISTS (
+                         SELECT 1 FROM note_tags nt
+                         JOIN tags t ON t.id = nt.tag_id
+                         WHERE nt.note_id = notes.id
+                           AND t.name LIKE $search ESCAPE '\'))
+                    """);
+            }
+
+            var orderBy = query.Sort switch
+            {
+                NoteSortOrder.ModifiedDescending => "modified_at_utc DESC, id",
+                NoteSortOrder.ModifiedAscending => "modified_at_utc ASC, id",
+                NoteSortOrder.CreatedDescending => "created_at_utc DESC, id",
+                NoteSortOrder.TitleAscending => "COALESCE(title, '') COLLATE NOCASE ASC, modified_at_utc DESC, id",
+                _ => "modified_at_utc DESC, id"
+            };
+            command.CommandText = $"""
+                SELECT {NoteColumns}
+                FROM notes
+                WHERE {string.Join(" AND ", conditions)}
+                ORDER BY {orderBy};
+                """;
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            var notes = new List<Note>();
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                notes.Add(SqliteTypeMapping.ReadNote(reader));
+            }
+
+            return notes.AsReadOnly();
+        }
+        catch (SqliteException exception)
+        {
+            throw SqliteErrorTranslator.Translate(
+                exception,
+                operation,
+                noteId: null,
+                cancellationToken);
+        }
+    }
+
     public async Task<IReadOnlyList<Guid>> GetTagIdsAsync(Guid id, CancellationToken cancellationToken = default)
     {
         const string operation = "get_tags";
@@ -264,9 +360,24 @@ public sealed class SqliteNoteRepository : INoteRepository
         }
     }
 
-    public async Task<Note> SetLifecycleAsync(
+    public Task<Note> SetLifecycleAsync(
         Guid id,
         NoteLifecycle lifecycle,
+        long expectedVersion,
+        DateTimeOffset modifiedAtUtc,
+        CancellationToken cancellationToken = default) =>
+        SetLifecycleAndDisplayAsync(
+            id,
+            lifecycle,
+            NoteDisplayIntent.Hidden,
+            expectedVersion,
+            modifiedAtUtc,
+            cancellationToken);
+
+    public async Task<Note> SetLifecycleAndDisplayAsync(
+        Guid id,
+        NoteLifecycle lifecycle,
+        NoteDisplayIntent displayIntent,
         long expectedVersion,
         DateTimeOffset modifiedAtUtc,
         CancellationToken cancellationToken = default)
@@ -284,7 +395,7 @@ public sealed class SqliteNoteRepository : INoteRepository
                 command.CommandText = """
                     UPDATE notes
                     SET lifecycle = $lifecycle,
-                        display_intent = 0,
+                        display_intent = $display_intent,
                         modified_at_utc = $modified_at_utc,
                         version = version + 1
                     WHERE id = $id AND version = $expected_version;
@@ -292,6 +403,7 @@ public sealed class SqliteNoteRepository : INoteRepository
                 command.Parameters.AddWithValue("$id", SqliteTypeMapping.GuidString(id));
                 command.Parameters.AddWithValue("$expected_version", expectedVersion);
                 command.Parameters.AddWithValue("$lifecycle", (int)lifecycle);
+                command.Parameters.AddWithValue("$display_intent", (int)displayIntent);
                 command.Parameters.AddWithValue("$modified_at_utc", SqliteTypeMapping.UtcString(modifiedAtUtc));
                 var affectedRows = await command.ExecuteNonQueryAsync(cancellationToken);
                 if (affectedRows == 0)
@@ -334,6 +446,67 @@ public sealed class SqliteNoteRepository : INoteRepository
             throw;
         }
     }
+
+    public async Task DeleteAsync(
+        Guid id,
+        long expectedVersion,
+        CancellationToken cancellationToken = default)
+    {
+        const string operation = "delete";
+        await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
+        SqliteTransaction? transaction = null;
+        try
+        {
+            transaction = connection.BeginTransaction(IsolationLevel.Serializable, deferred: true);
+            await using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = """
+                    DELETE FROM notes
+                    WHERE id = $id AND version = $expected_version;
+                    """;
+                command.Parameters.AddWithValue("$id", SqliteTypeMapping.GuidString(id));
+                command.Parameters.AddWithValue("$expected_version", expectedVersion);
+                var affectedRows = await command.ExecuteNonQueryAsync(cancellationToken);
+                if (affectedRows == 0)
+                {
+                    throw await CreateVersionFailureAsync(
+                        connection, transaction, id, expectedVersion, operation, cancellationToken);
+                }
+            }
+
+            await SqliteChangeMarker.BumpAsync(connection, transaction, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            await CommitAsync(transaction, operation, id, expectedVersion);
+            await DisposeTransactionQuietlyAsync(transaction);
+        }
+        catch (SqliteException exception)
+        {
+            var translated = SqliteErrorTranslator.Translate(exception, operation, id, cancellationToken);
+            if (transaction is not null)
+            {
+                await DisposeTransactionOnFailureAsync(transaction, translated);
+            }
+
+            ExceptionDispatchInfo.Capture(translated).Throw();
+            throw;
+        }
+        catch (Exception exception)
+        {
+            if (transaction is not null)
+            {
+                await DisposeTransactionOnFailureAsync(transaction, exception);
+            }
+
+            throw;
+        }
+    }
+
+    private static string EscapeLike(string value) =>
+        value
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("%", "\\%", StringComparison.Ordinal)
+            .Replace("_", "\\_", StringComparison.Ordinal);
 
     private static void ValidateAppearance(Note note)
     {

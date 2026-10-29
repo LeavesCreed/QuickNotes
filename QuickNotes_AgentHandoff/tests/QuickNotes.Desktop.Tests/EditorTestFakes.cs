@@ -42,6 +42,32 @@ internal sealed class FakeNoteRepository : INoteRepository
         return Task.FromResult(result);
     }
 
+    public Task<IReadOnlyList<Note>> QueryAsync(
+        NoteQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        var result = Notes.Values.Where(note =>
+            (query.Lifecycle is { } lifecycle && note.Lifecycle == lifecycle)
+            || (query.Lifecycle is null && note.Lifecycle == NoteLifecycle.Active)
+            || (query.Lifecycle is null && query.IncludeArchived && note.Lifecycle == NoteLifecycle.Archived));
+        if (query.CategoryId is { } categoryId)
+        {
+            result = result.Where(note => note.CategoryId == categoryId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.SearchText))
+        {
+            result = result.Where(note =>
+                (note.Title?.Contains(query.SearchText, StringComparison.OrdinalIgnoreCase) == true)
+                || note.Body.Contains(query.SearchText, StringComparison.OrdinalIgnoreCase));
+        }
+
+        IReadOnlyList<Note> ordered = result
+            .OrderByDescending(note => note.ModifiedAtUtc)
+            .ToArray();
+        return Task.FromResult(ordered);
+    }
+
     public Task<IReadOnlyList<Guid>> GetTagIdsAsync(
         Guid id,
         CancellationToken cancellationToken = default) =>
@@ -65,17 +91,43 @@ internal sealed class FakeNoteRepository : INoteRepository
         NoteLifecycle lifecycle,
         long expectedVersion,
         DateTimeOffset modifiedAtUtc,
+        CancellationToken cancellationToken = default) =>
+        SetLifecycleAndDisplayAsync(
+            id,
+            lifecycle,
+            NoteDisplayIntent.Hidden,
+            expectedVersion,
+            modifiedAtUtc,
+            cancellationToken);
+
+    public Task<Note> SetLifecycleAndDisplayAsync(
+        Guid id,
+        NoteLifecycle lifecycle,
+        NoteDisplayIntent displayIntent,
+        long expectedVersion,
+        DateTimeOffset modifiedAtUtc,
         CancellationToken cancellationToken = default)
     {
         var current = Notes[id];
         var updated = current with
         {
             Lifecycle = lifecycle,
+            DisplayIntent = displayIntent,
             Version = expectedVersion + 1,
             ModifiedAtUtc = modifiedAtUtc
         };
         Notes[id] = updated;
         return Task.FromResult(updated);
+    }
+
+    public Task DeleteAsync(
+        Guid id,
+        long expectedVersion,
+        CancellationToken cancellationToken = default)
+    {
+        Notes.Remove(id);
+        Tags.Remove(id);
+        return Task.CompletedTask;
     }
 }
 

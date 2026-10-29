@@ -12,4 +12,7 @@ public interface ICatalogRepository
     Task DeleteTagAsync(Guid id, CancellationToken cancellationToken = default);
     Task<Category?> GetCategoryAsync(Guid id, CancellationToken cancellationToken = default);
     Task<Tag?> GetTagAsync(Guid id, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<Category>> ListCategoriesAsync(CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<Tag>> ListTagsAsync(CancellationToken cancellationToken = default);
+    Task MergeTagAsync(Guid sourceTagId, Guid targetTagId, CancellationToken cancellationToken = default);
 }

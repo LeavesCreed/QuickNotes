@@ -428,6 +428,11 @@ internal sealed class SignalingNoteRepository : INoteRepository
         CancellationToken cancellationToken = default) =>
         _inner.ListAsync(lifecycle, cancellationToken);
 
+    public Task<IReadOnlyList<Note>> QueryAsync(
+        NoteQuery query,
+        CancellationToken cancellationToken = default) =>
+        _inner.QueryAsync(query, cancellationToken);
+
     public Task<IReadOnlyList<Guid>> GetTagIdsAsync(Guid id, CancellationToken cancellationToken = default) =>
         _inner.GetTagIdsAsync(id, cancellationToken);
 
@@ -445,6 +450,27 @@ internal sealed class SignalingNoteRepository : INoteRepository
         DateTimeOffset modifiedAtUtc,
         CancellationToken cancellationToken = default) =>
         _inner.SetLifecycleAsync(id, lifecycle, expectedVersion, modifiedAtUtc, cancellationToken);
+
+    public Task<Note> SetLifecycleAndDisplayAsync(
+        Guid id,
+        NoteLifecycle lifecycle,
+        NoteDisplayIntent displayIntent,
+        long expectedVersion,
+        DateTimeOffset modifiedAtUtc,
+        CancellationToken cancellationToken = default) =>
+        _inner.SetLifecycleAndDisplayAsync(
+            id,
+            lifecycle,
+            displayIntent,
+            expectedVersion,
+            modifiedAtUtc,
+            cancellationToken);
+
+    public Task DeleteAsync(
+        Guid id,
+        long expectedVersion,
+        CancellationToken cancellationToken = default) =>
+        _inner.DeleteAsync(id, expectedVersion, cancellationToken);
 }
 
 internal enum CommitUnknownMode
@@ -479,6 +505,11 @@ internal sealed class CommitUnknownNoteRepository : INoteRepository
         CancellationToken cancellationToken = default) =>
         _inner.ListAsync(lifecycle, cancellationToken);
 
+    public Task<IReadOnlyList<Note>> QueryAsync(
+        NoteQuery query,
+        CancellationToken cancellationToken = default) =>
+        _inner.QueryAsync(query, cancellationToken);
+
     public Task<IReadOnlyList<Guid>> GetTagIdsAsync(Guid id, CancellationToken cancellationToken = default) =>
         _inner.GetTagIdsAsync(id, cancellationToken);
 
@@ -496,6 +527,27 @@ internal sealed class CommitUnknownNoteRepository : INoteRepository
         DateTimeOffset modifiedAtUtc,
         CancellationToken cancellationToken = default) =>
         _inner.SetLifecycleAsync(id, lifecycle, expectedVersion, modifiedAtUtc, cancellationToken);
+
+    public Task<Note> SetLifecycleAndDisplayAsync(
+        Guid id,
+        NoteLifecycle lifecycle,
+        NoteDisplayIntent displayIntent,
+        long expectedVersion,
+        DateTimeOffset modifiedAtUtc,
+        CancellationToken cancellationToken = default) =>
+        _inner.SetLifecycleAndDisplayAsync(
+            id,
+            lifecycle,
+            displayIntent,
+            expectedVersion,
+            modifiedAtUtc,
+            cancellationToken);
+
+    public Task DeleteAsync(
+        Guid id,
+        long expectedVersion,
+        CancellationToken cancellationToken = default) =>
+        _inner.DeleteAsync(id, expectedVersion, cancellationToken);
 
     private async Task<Note> CreateCoreAsync(
         Note note,

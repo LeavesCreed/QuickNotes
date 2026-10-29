@@ -298,6 +298,11 @@ public sealed class EditorPersistenceIntegrationTests
             CancellationToken cancellationToken = default) =>
             _inner.ListAsync(lifecycle, cancellationToken);
 
+        public Task<IReadOnlyList<Note>> QueryAsync(
+            NoteQuery query,
+            CancellationToken cancellationToken = default) =>
+            _inner.QueryAsync(query, cancellationToken);
+
         public Task<IReadOnlyList<Guid>> GetTagIdsAsync(
             Guid id,
             CancellationToken cancellationToken = default) =>
@@ -321,6 +326,27 @@ public sealed class EditorPersistenceIntegrationTests
             DateTimeOffset modifiedAtUtc,
             CancellationToken cancellationToken = default) =>
             _inner.SetLifecycleAsync(id, lifecycle, expectedVersion, modifiedAtUtc, cancellationToken);
+
+        public Task<Note> SetLifecycleAndDisplayAsync(
+            Guid id,
+            NoteLifecycle lifecycle,
+            NoteDisplayIntent displayIntent,
+            long expectedVersion,
+            DateTimeOffset modifiedAtUtc,
+            CancellationToken cancellationToken = default) =>
+            _inner.SetLifecycleAndDisplayAsync(
+                id,
+                lifecycle,
+                displayIntent,
+                expectedVersion,
+                modifiedAtUtc,
+                cancellationToken);
+
+        public Task DeleteAsync(
+            Guid id,
+            long expectedVersion,
+            CancellationToken cancellationToken = default) =>
+            _inner.DeleteAsync(id, expectedVersion, cancellationToken);
     }
 
     private sealed class UnknownOnceCoordinator : INoteSaveCoordinator

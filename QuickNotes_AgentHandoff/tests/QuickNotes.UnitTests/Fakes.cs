@@ -31,6 +31,25 @@ internal sealed class FakeNoteRepository : INoteRepository
     public Func<NoteLifecycle, CancellationToken, Task<IReadOnlyList<Note>>> ListHandler { get; set; } =
         static (_, _) => Task.FromResult<IReadOnlyList<Note>>(Array.Empty<Note>());
 
+    public Func<NoteQuery, CancellationToken, Task<IReadOnlyList<Note>>> QueryHandler { get; set; } =
+        static (_, _) => Task.FromResult<IReadOnlyList<Note>>(Array.Empty<Note>());
+
+    public Func<Guid, NoteLifecycle, NoteDisplayIntent, long, DateTimeOffset, CancellationToken, Task<Note>> SetLifecycleAndDisplayHandler { get; set; } =
+        static (id, lifecycle, displayIntent, expectedVersion, modifiedAtUtc, _) => Task.FromResult(new Note
+        {
+            Id = id,
+            Body = "stored",
+            CreatedAtUtc = TestData.Timestamp,
+            ModifiedAtUtc = modifiedAtUtc,
+            Version = expectedVersion + 1,
+            Lifecycle = lifecycle,
+            CategoryId = Category.UncategorizedId,
+            DisplayIntent = displayIntent
+        });
+
+    public Func<Guid, long, CancellationToken, Task> DeleteHandler { get; set; } =
+        static (_, _, _) => Task.CompletedTask;
+
     public Func<Guid, CancellationToken, Task<IReadOnlyList<Guid>>> GetTagIdsHandler { get; set; } =
         static (_, _) => Task.FromResult<IReadOnlyList<Guid>>(Array.Empty<Guid>());
 
@@ -39,7 +58,9 @@ internal sealed class FakeNoteRepository : INoteRepository
     public int SetLifecycleCalls { get; private set; }
     public int GetCalls { get; private set; }
     public int ListCalls { get; private set; }
+    public int QueryCalls { get; private set; }
     public int GetTagIdsCalls { get; private set; }
+    public int DeleteCalls { get; private set; }
     public Note? LastCreatedNote { get; private set; }
     public IReadOnlyCollection<Guid>? LastCreateTagIds { get; private set; }
 
@@ -68,6 +89,14 @@ internal sealed class FakeNoteRepository : INoteRepository
         return ListHandler(lifecycle, cancellationToken);
     }
 
+    public Task<IReadOnlyList<Note>> QueryAsync(
+        NoteQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        QueryCalls++;
+        return QueryHandler(query, cancellationToken);
+    }
+
     public Task<IReadOnlyList<Guid>> GetTagIdsAsync(Guid id, CancellationToken cancellationToken = default)
     {
         GetTagIdsCalls++;
@@ -93,6 +122,33 @@ internal sealed class FakeNoteRepository : INoteRepository
     {
         SetLifecycleCalls++;
         return SetLifecycleHandler(id, lifecycle, expectedVersion, modifiedAtUtc, cancellationToken);
+    }
+
+    public Task<Note> SetLifecycleAndDisplayAsync(
+        Guid id,
+        NoteLifecycle lifecycle,
+        NoteDisplayIntent displayIntent,
+        long expectedVersion,
+        DateTimeOffset modifiedAtUtc,
+        CancellationToken cancellationToken = default)
+    {
+        SetLifecycleCalls++;
+        return SetLifecycleAndDisplayHandler(
+            id,
+            lifecycle,
+            displayIntent,
+            expectedVersion,
+            modifiedAtUtc,
+            cancellationToken);
+    }
+
+    public Task DeleteAsync(
+        Guid id,
+        long expectedVersion,
+        CancellationToken cancellationToken = default)
+    {
+        DeleteCalls++;
+        return DeleteHandler(id, expectedVersion, cancellationToken);
     }
 }
 
