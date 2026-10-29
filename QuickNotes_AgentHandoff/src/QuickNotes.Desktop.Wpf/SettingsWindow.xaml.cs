@@ -26,6 +26,21 @@ public partial class SettingsWindow : Window
             DefaultFontSizeBox.Text = settings.DefaultFontSize.ToString();
             NotificationsCheckBox.IsChecked = settings.NotificationsEnabled;
             GlobalHiddenCheckBox.IsChecked = settings.GlobalHidden;
+            var startup = _host.StartupRegistration;
+            if (startup is null)
+            {
+                StartupCheckBox.IsEnabled = false;
+                StartupStatusText.Text = "当前运行环境不支持开机启动注册。";
+            }
+            else
+            {
+                var status = startup.GetStatus();
+                StartupCheckBox.IsChecked = status.Registered;
+                StartupStatusText.Text = status.ErrorCode is null
+                    ? (status.Registered ? "当前已注册开机启动。" : "当前未注册开机启动。")
+                    : $"读取注册状态失败：{status.ErrorCode}";
+            }
+
             TopBarPinCheckBox.IsChecked = settings.TopBar.Actions.Contains(TopBarAction.Pin);
             TopBarCategoryCheckBox.IsChecked = settings.TopBar.Actions.Contains(TopBarAction.Category);
             TopBarColorCheckBox.IsChecked = settings.TopBar.Actions.Contains(TopBarAction.Color);
@@ -69,8 +84,38 @@ public partial class SettingsWindow : Window
                 UpdatedAtUtc = DateTimeOffset.UtcNow
             };
             updated.Validate();
+            var startupEnabled = StartupCheckBox.IsChecked == true;
+            var startup = _host.StartupRegistration;
+            if (startup is not null)
+            {
+                var registration = startup.SetEnabled(startupEnabled);
+                if (registration.Registered != startupEnabled)
+                {
+                    ErrorText.Text = registration.ErrorCode is null
+                        ? "开机启动注册状态未生效。"
+                        : $"开机启动注册失败：{registration.ErrorCode}";
+                    return;
+                }
+
+                if (_host.DeviceSettings is { } deviceStore)
+                {
+                    var device = await deviceStore.ReadAsync();
+                    var currentDevice = device.Status == DeviceSettingsReadResultStatus.Found
+                        ? device.Settings!
+                        : new DeviceSettings();
+                    await deviceStore.WriteAsync(currentDevice with
+                    {
+                        StartupRegistrationEnabled = startupEnabled
+                    });
+                }
+            }
+
             await _host.EditingServices.Settings.UpdateAsync(updated, current.Version);
             ErrorText.Text = "设置已保存";
+            if (System.Windows.Application.Current is App app)
+            {
+                await app.NotifySettingsChangedAsync();
+            }
         }
         catch (Exception exception)
         {

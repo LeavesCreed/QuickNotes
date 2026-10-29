@@ -14,6 +14,7 @@ public partial class WorkspaceWindow : Window
     private readonly DesktopApplicationHost _host;
     private readonly DesktopEditingServices _services;
     private readonly NoteWindowManager? _noteWindows;
+    private readonly Func<Task>? _exitApplication;
     private NoteEditorSession? _session;
     private bool _loadingEditor;
     private bool _suppressSelection;
@@ -29,12 +30,16 @@ public partial class WorkspaceWindow : Window
     private CancellationTokenSource? _searchDebounce;
     private Guid? _categoryFilterId;
 
-    public WorkspaceWindow(DesktopApplicationHost host, NoteWindowManager? noteWindows = null)
+    public WorkspaceWindow(
+        DesktopApplicationHost host,
+        NoteWindowManager? noteWindows = null,
+        Func<Task>? exitApplication = null)
     {
         _host = host ?? throw new ArgumentNullException(nameof(host));
         _services = host.EditingServices
             ?? throw new InvalidOperationException("Editing services are not available.");
         _noteWindows = noteWindows;
+        _exitApplication = exitApplication;
         InitializeComponent();
         BackupButton.IsEnabled = _host.BackupServices is not null;
         _suppressSelection = true;
@@ -1086,13 +1091,44 @@ public partial class WorkspaceWindow : Window
         await RefreshAfterManagementAsync(clearMissingSession: false);
     }
 
-    private void SettingsButton_Click(object sender, RoutedEventArgs e)
+    private void SettingsButton_Click(object sender, RoutedEventArgs e) => OpenSettings();
+
+    public void OpenSettings()
     {
         var window = new SettingsWindow(_host, this)
         {
             Owner = this
         };
         window.ShowDialog();
+    }
+
+    public async Task<bool> PrepareForExitAsync()
+    {
+        if (_session is { HasPendingChanges: true })
+        {
+            await _session.FlushDraftAsync();
+            var result = await _session.SaveNowAsync();
+            if (result.Status != SaveStatus.Saved || _session.HasPendingChanges)
+            {
+                return false;
+            }
+        }
+
+        _allowClose = true;
+        Close();
+        return true;
+    }
+
+    public async Task CreateNewFromTrayAsync()
+    {
+        Show();
+        if (WindowState == WindowState.Minimized)
+        {
+            WindowState = WindowState.Normal;
+        }
+
+        Activate();
+        await StartNewAsync();
     }
 
     private async void NewButton_Click(object sender, RoutedEventArgs e) => await StartNewAsync();
@@ -1507,13 +1543,6 @@ public partial class WorkspaceWindow : Window
             return;
         }
 
-        if (_session is null || !_session.HasPendingChanges)
-        {
-            _allowClose = true;
-            base.OnClosing(e);
-            return;
-        }
-
         e.Cancel = true;
         if (_closing)
         {
@@ -1528,39 +1557,60 @@ public partial class WorkspaceWindow : Window
     {
         try
         {
-            await _session!.FlushDraftAsync();
-            SaveResult? result = null;
-            try
+            var choiceWindow = new CloseChoiceWindow
             {
-                result = await _session.SaveNowAsync();
-            }
-            catch (Exception exception)
+                Owner = this
+            };
+            var selected = choiceWindow.ShowDialog() == true
+                ? choiceWindow.Choice
+                : CloseChoice.Cancel;
+            if (selected == CloseChoice.Cancel)
             {
-                _host.Log.TryWrite("ERROR", "workspace", "close save failed", exception.GetType().Name);
-            }
-
-            if (result?.Status == SaveStatus.Saved && !_session.HasPendingChanges)
-            {
-                _allowClose = true;
-                Close();
                 return;
             }
 
-            var answer = MessageBox.Show(
-                this,
-                "当前便签未能保存。草稿已保留；是否保留草稿并退出？",
-                "QuickNotes",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Warning);
-            if (answer == MessageBoxResult.Yes)
+            if (_session is not null)
             {
-                _allowClose = true;
+                await _session.FlushDraftAsync();
+            }
+
+            if (_session is { HasPendingChanges: true })
+            {
+                var result = await _session.SaveNowAsync();
+                if (result.Status != SaveStatus.Saved || _session.HasPendingChanges)
+                {
+                    var answer = MessageBox.Show(
+                        this,
+                        "当前便签未能保存。草稿已保留；是否继续关闭？",
+                        "QuickNotes",
+                        MessageBoxButton.YesNo,
+                        MessageBoxImage.Warning);
+                    if (answer != MessageBoxResult.Yes)
+                    {
+                        return;
+                    }
+                }
+            }
+
+            if (selected == CloseChoice.MinimizeToTray)
+            {
+                Hide();
+                return;
+            }
+
+            _allowClose = true;
+            if (_exitApplication is not null)
+            {
+                await _exitApplication();
+            }
+            else
+            {
                 Close();
             }
         }
         catch (Exception exception)
         {
-            ShowError("退出前保存失败", exception);
+            ShowError("关闭前保存失败", exception);
         }
         finally
         {

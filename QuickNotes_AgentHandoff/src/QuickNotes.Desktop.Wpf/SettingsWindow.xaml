@@ -15,7 +15,7 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <TextBlock Text="常规" FontWeight="SemiBold" />
+            <TextBlock Text="常规" FontWeight="SemiBold" />
         <Grid Grid.Row="1" Margin="0,8,0,10">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="140" />
@@ -25,11 +25,14 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
             <TextBlock Text="默认字号：" VerticalAlignment="Center" />
             <TextBox x:Name="DefaultFontSizeBox" Grid.Column="1" Width="80" HorizontalAlignment="Left" Padding="5" />
             <CheckBox x:Name="NotificationsCheckBox" Grid.Row="1" Grid.Column="1" Content="启用系统通知" Margin="0,8,0,0" />
             <CheckBox x:Name="GlobalHiddenCheckBox" Grid.Row="2" Grid.Column="1" Content="全局隐藏桌面便签（不改变单张隐藏状态）" Margin="0,8,0,0" />
+            <CheckBox x:Name="StartupCheckBox" Grid.Row="3" Grid.Column="1" Content="开机启动（--startup，登录后不显示管理中心）" Margin="0,8,0,0" />
+            <TextBlock x:Name="StartupStatusText" Grid.Row="3" Grid.Column="1" Margin="0,28,0,0" Foreground="#777777" TextWrapping="Wrap" />
         </Grid>
 
         <TextBlock Grid.Row="2" Text="顶栏动作（全局统一）" FontWeight="SemiBold" />

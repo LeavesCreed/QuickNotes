@@ -1,6 +1,8 @@
+using System.Reflection;
 using System.Windows;
 using Microsoft.Win32;
 using QuickNotes.Desktop.Hosting;
+using QuickNotes.Desktop.Startup;
 
 namespace QuickNotes.Desktop.Wpf;
 
@@ -8,6 +10,11 @@ public partial class App : System.Windows.Application
 {
     private DesktopApplicationHost? _host;
     private NoteWindowManager? _noteWindows;
+    private TrayIconService? _tray;
+    private WorkspaceWindow? _workspace;
+    private StartupRegistrationService? _startupRegistration;
+    private bool _exiting;
+    private bool _startOnLogin;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -34,7 +41,15 @@ public partial class App : System.Windows.Application
             return;
         }
 
-        _host = new DesktopApplicationHost(options);
+        _startOnLogin = options.StartOnLogin;
+        var executable = Environment.ProcessPath ?? Environment.GetCommandLineArgs()[0];
+        _startupRegistration = new StartupRegistrationService(
+            new WindowsRunRegistry(),
+            "QuickNotes",
+            StartupRegistrationService.BuildCommand(
+                executable,
+                Assembly.GetEntryAssembly()?.Location));
+        _host = new DesktopApplicationHost(options, startupRegistration: _startupRegistration);
         _host.RestoreApplied += OnRestoreApplied;
         SystemEvents.PowerModeChanged += OnPowerModeChanged;
         try
@@ -64,14 +79,27 @@ public partial class App : System.Windows.Application
             {
                 _noteWindows = new NoteWindowManager(_host);
                 await _noteWindows.StartAsync();
+                _tray = CreateTray();
+                _workspace = new WorkspaceWindow(_host, _noteWindows, ShutdownAsync);
+                MainWindow = _workspace;
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                if (!_startOnLogin)
+                {
+                    _workspace.Show();
+                }
+                else
+                {
+                    _workspace.Hide();
+                }
+
+                await UpdateTrayStateAsync();
+                return;
             }
 
-            var window = canUseEditing
-                ? new WorkspaceWindow(_host, _noteWindows)
-                : (Window)new StartupWindow(_host);
-            MainWindow = window;
+            var startupWindow = new StartupWindow(_host);
+            MainWindow = startupWindow;
             ShutdownMode = ShutdownMode.OnMainWindowClose;
-            window.Show();
+            startupWindow.Show();
         }
         catch (Exception exception)
         {
@@ -85,30 +113,125 @@ public partial class App : System.Windows.Application
         }
     }
 
-    private void OnActivationRequested()
+    private TrayIconService CreateTray() =>
+        new(
+            createNote: () => _ = CreateNoteFromTrayAsync(),
+            showWorkspace: ShowWorkspace,
+            toggleGlobalHidden: () => _ = ToggleGlobalHiddenAsync(),
+            showSettings: () => _ = ShowSettingsAsync(),
+            exit: () => _ = ShutdownAsync());
+
+    private async Task CreateNoteFromTrayAsync()
     {
-        Dispatcher.Invoke(() =>
+        ShowWorkspace();
+        if (_workspace is not null)
         {
-            if (MainWindow is not Window window)
-            {
-                return;
-            }
+            await _workspace.CreateNewFromTrayAsync();
+        }
+    }
 
-            if (window.WindowState == WindowState.Minimized)
-            {
-                window.WindowState = WindowState.Normal;
-            }
+    private void ShowWorkspace()
+    {
+        if (_host?.EditingServices is null)
+        {
+            return;
+        }
 
-            window.Show();
-            window.Activate();
-        });
+        if (_workspace is null)
+        {
+            _workspace = new WorkspaceWindow(_host, _noteWindows, ShutdownAsync);
+            MainWindow = _workspace;
+        }
+
+        _workspace.Show();
+        if (_workspace.WindowState == WindowState.Minimized)
+        {
+            _workspace.WindowState = WindowState.Normal;
+        }
+
+        _workspace.Activate();
+    }
+
+    private async Task ShowSettingsAsync()
+    {
+        ShowWorkspace();
+        _workspace?.OpenSettings();
+        await UpdateTrayStateAsync();
+        if (_noteWindows is not null)
+        {
+            await _noteWindows.RefreshAsync();
+        }
+    }
+
+    private async Task ToggleGlobalHiddenAsync()
+    {
+        if (_host?.EditingServices is not { } services)
+        {
+            return;
+        }
+
+        try
+        {
+            var current = await services.Settings.GetAsync();
+            var updated = current with
+            {
+                GlobalHidden = !current.GlobalHidden,
+                UpdatedAtUtc = DateTimeOffset.UtcNow
+            };
+            await services.Settings.UpdateAsync(updated, current.Version);
+            _tray?.SetGlobalHidden(updated.GlobalHidden);
+            if (_noteWindows is not null)
+            {
+                await _noteWindows.RefreshAsync();
+            }
+        }
+        catch (Exception exception)
+        {
+            _host.Log.TryWrite(
+                "WARN",
+                "tray",
+                "global visibility toggle failed",
+                exception.GetType().Name);
+        }
+    }
+
+    private async Task UpdateTrayStateAsync()
+    {
+        if (_host?.EditingServices is not { } services)
+        {
+            return;
+        }
+
+        try
+        {
+            var settings = await services.Settings.GetAsync();
+            _tray?.SetGlobalHidden(settings.GlobalHidden);
+        }
+        catch (Exception exception)
+        {
+            _host.Log.TryWrite("WARN", "tray", "tray state read failed", exception.GetType().Name);
+        }
+    }
+
+    public async Task NotifySettingsChangedAsync()
+    {
+        await UpdateTrayStateAsync();
+        if (_noteWindows is not null)
+        {
+            await _noteWindows.RefreshAsync();
+        }
+    }
+
+    private async void OnActivationRequested()
+    {
+        await Dispatcher.InvokeAsync(ShowWorkspace);
     }
 
     private void OnRestoreApplied()
     {
-        Dispatcher.Invoke(() =>
+        _ = Dispatcher.InvokeAsync(async () =>
         {
-            if (_host is null)
+            if (_host is null || _exiting)
             {
                 return;
             }
@@ -116,42 +239,89 @@ public partial class App : System.Windows.Application
             var oldWindow = MainWindow;
             var oldNoteWindows = _noteWindows;
             _noteWindows = null;
-            _ = RebuildAfterRestoreAsync(oldWindow, oldNoteWindows);
+            try
+            {
+                if (oldNoteWindows is not null)
+                {
+                    await oldNoteWindows.DisposeAsync();
+                }
+
+                var canUseEditing = _host.Assessment?.CanEnterNormalUse == true
+                    && _host.EditingServices is not null;
+                if (canUseEditing)
+                {
+                    _noteWindows = new NoteWindowManager(_host);
+                    await _noteWindows.StartAsync();
+                }
+
+                var window = canUseEditing
+                    ? new WorkspaceWindow(_host, _noteWindows, ShutdownAsync)
+                    : (Window)new StartupWindow(_host);
+                MainWindow = window;
+                _workspace = window as WorkspaceWindow;
+                window.Show();
+                if (oldWindow is WorkspaceWindow workspace)
+                {
+                    workspace.CloseAfterRestore();
+                }
+                else
+                {
+                    oldWindow?.Close();
+                }
+
+                await UpdateTrayStateAsync();
+            }
+            catch (Exception exception)
+            {
+                TryLog("restore", "window rebuild failed", exception.GetType().Name);
+            }
         });
     }
 
-    private async Task RebuildAfterRestoreAsync(Window? oldWindow, NoteWindowManager? oldNoteWindows)
+    private async Task ShutdownAsync()
     {
-        if (_host is null)
+        if (_exiting)
         {
             return;
         }
 
-        if (oldNoteWindows is not null)
+        _exiting = true;
+        try
         {
-            await oldNoteWindows.DisposeAsync();
-        }
+            if (_workspace is not null)
+            {
+                var prepared = await _workspace.PrepareForExitAsync();
+                if (!prepared)
+                {
+                    _exiting = false;
+                    MessageBox.Show(
+                        _workspace,
+                        "当前便签未能保存，应用未退出。请先处理保存失败或冲突。",
+                        "QuickNotes",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                    return;
+                }
+            }
 
-        var canUseEditing = _host.Assessment?.CanEnterNormalUse == true
-            && _host.EditingServices is not null;
-        if (canUseEditing)
-        {
-            _noteWindows = new NoteWindowManager(_host);
-            await _noteWindows.StartAsync();
-        }
+            if (_noteWindows is not null)
+            {
+                await _noteWindows.DisposeAsync();
+                _noteWindows = null;
+            }
 
-        var window = canUseEditing
-            ? new WorkspaceWindow(_host, _noteWindows)
-            : (Window)new StartupWindow(_host);
-        MainWindow = window;
-        window.Show();
-        if (oldWindow is WorkspaceWindow workspace)
-        {
-            workspace.CloseAfterRestore();
+            _tray?.Dispose();
+            _tray = null;
+            _host?.Dispose();
+            _host = null;
         }
-        else
+        catch (Exception exception)
         {
-            oldWindow?.Close();
+            TryLog("shutdown", "shutdown failed", exception.GetType().Name);
+        }
+        finally
+        {
+            Shutdown();
         }
     }
 
@@ -162,7 +332,10 @@ public partial class App : System.Windows.Application
         {
             _noteWindows?.DisposeAsync().AsTask().GetAwaiter().GetResult();
             _noteWindows = null;
+            _tray?.Dispose();
+            _tray = null;
             _host?.Dispose();
+            _host = null;
         }
         catch
         {

@@ -5,12 +5,14 @@ public sealed record DesktopStartupOptions
     public string? DataRoot { get; init; }
     public string? BackupDirectory { get; init; }
     public bool SingleInstanceProbe { get; init; }
+    public bool StartOnLogin { get; init; }
 
     public static DesktopStartupOptions Parse(IReadOnlyList<string> arguments)
     {
         string? dataRoot = null;
         string? backupDirectory = null;
         var probe = false;
+        var startOnLogin = false;
         for (var index = 0; index < arguments.Count; index++)
         {
             switch (arguments[index])
@@ -24,6 +26,10 @@ public sealed record DesktopStartupOptions
                 case "--single-instance-probe":
                     probe = true;
                     break;
+                case "--startup":
+                case "--background":
+                    startOnLogin = true;
+                    break;
                 default:
                     throw new ArgumentException($"Unknown argument: {arguments[index]}.");
             }
@@ -33,7 +39,8 @@ public sealed record DesktopStartupOptions
         {
             DataRoot = dataRoot,
             BackupDirectory = backupDirectory,
-            SingleInstanceProbe = probe
+            SingleInstanceProbe = probe,
+            StartOnLogin = startOnLogin
         };
     }
 

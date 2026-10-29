@@ -19,6 +19,7 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
 {
     private readonly DesktopStartupOptions _options;
     private readonly TimeProvider _timeProvider;
+    private readonly StartupRegistrationService? _startupRegistration;
     private DiagnosticLog? _log;
     private DesktopPaths? _paths;
     private SingleInstanceGuard? _guard;
@@ -34,10 +35,12 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
 
     public DesktopApplicationHost(
         DesktopStartupOptions options,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        StartupRegistrationService? startupRegistration = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _startupRegistration = startupRegistration;
     }
 
     public DesktopPaths Paths => _paths
@@ -53,6 +56,10 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
     public DesktopEditingServices? EditingServices => _editingServices;
 
     public DesktopBackupServices? BackupServices => _backupServices;
+
+    public StartupRegistrationService? StartupRegistration => _startupRegistration;
+
+    public IDeviceSettingsStore? DeviceSettings => _deviceSettings;
 
     public event Action? RestoreApplied;
 
