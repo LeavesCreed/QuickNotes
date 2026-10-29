@@ -6,6 +6,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Threading;
 using QuickNotes.Application;
 using QuickNotes.Desktop.Editing;
 using QuickNotes.Desktop.Hosting;
@@ -126,7 +127,14 @@ public partial class NoteWindow : Window
         }
 
         Activate();
-        await Task.CompletedTask;
+        await Dispatcher.InvokeAsync(
+            () =>
+            {
+                BodyBox.Focus();
+                Keyboard.Focus(BodyBox);
+                BodyBox.CaretIndex = BodyBox.Text.Length;
+            },
+            DispatcherPriority.Input);
     }
 
     public void CloseFromManager()
