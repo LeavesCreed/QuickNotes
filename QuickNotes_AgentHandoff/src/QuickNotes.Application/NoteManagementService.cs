@@ -33,14 +33,26 @@ public sealed class NoteManagementService
         CancellationToken cancellationToken = default)
     {
         await using var lease = await _writeGate.EnterWriteAsync(cancellationToken).ConfigureAwait(false);
+        return await MoveToCategoryCoreAsync(noteId, categoryId, expectedVersion, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<BatchOperationResult> MoveToCategoryAsync(
+        IReadOnlyCollection<Guid> noteIds,
+        Guid categoryId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(noteIds);
+        await using var lease = await _writeGate.EnterWriteAsync(cancellationToken).ConfigureAwait(false);
         _ = await _catalog.GetCategoryAsync(categoryId, cancellationToken).ConfigureAwait(false)
-            ?? throw new CatalogNotFoundException(categoryId, "move_note_category");
-        var note = await GetRequiredAsync(noteId, cancellationToken).ConfigureAwait(false);
-        var tags = await _notes.GetTagIdsAsync(noteId, cancellationToken).ConfigureAwait(false);
-        return await _notes.UpdateAsync(
-                note with { CategoryId = categoryId, ModifiedAtUtc = Now() },
-                expectedVersion,
-                tags,
+            ?? throw new CatalogNotFoundException(categoryId, "batch_move_note_category");
+        return await RunBatchAsync(
+                noteIds,
+                (noteId, version) => MoveToCategoryCoreAsync(
+                    noteId,
+                    categoryId,
+                    version,
+                    cancellationToken),
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -70,19 +82,27 @@ public sealed class NoteManagementService
     {
         ArgumentNullException.ThrowIfNull(tagIds);
         await using var lease = await _writeGate.EnterWriteAsync(cancellationToken).ConfigureAwait(false);
+        return await AddTagsCoreAsync(noteId, tagIds, expectedVersion, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<BatchOperationResult> AddTagsAsync(
+        IReadOnlyCollection<Guid> noteIds,
+        IReadOnlyCollection<Guid> tagIds,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(noteIds);
+        ArgumentNullException.ThrowIfNull(tagIds);
+        await using var lease = await _writeGate.EnterWriteAsync(cancellationToken).ConfigureAwait(false);
         foreach (var tagId in tagIds.Distinct())
         {
             _ = await _catalog.GetTagAsync(tagId, cancellationToken).ConfigureAwait(false)
-                ?? throw new CatalogNotFoundException(tagId, "add_note_tag");
+                ?? throw new CatalogNotFoundException(tagId, "batch_add_note_tag");
         }
 
-        var note = await GetRequiredAsync(noteId, cancellationToken).ConfigureAwait(false);
-        var current = await _notes.GetTagIdsAsync(noteId, cancellationToken).ConfigureAwait(false);
-        var merged = current.Concat(tagIds).Distinct().ToArray();
-        return await _notes.UpdateAsync(
-                note with { ModifiedAtUtc = Now() },
-                expectedVersion,
-                merged,
+        return await RunBatchAsync(
+                noteIds,
+                (noteId, version) => AddTagsCoreAsync(noteId, tagIds, version, cancellationToken),
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -95,13 +115,21 @@ public sealed class NoteManagementService
     {
         ArgumentNullException.ThrowIfNull(tagIds);
         await using var lease = await _writeGate.EnterWriteAsync(cancellationToken).ConfigureAwait(false);
-        var note = await GetRequiredAsync(noteId, cancellationToken).ConfigureAwait(false);
-        var current = await _notes.GetTagIdsAsync(noteId, cancellationToken).ConfigureAwait(false);
-        var remaining = current.Where(id => !tagIds.Contains(id)).ToArray();
-        return await _notes.UpdateAsync(
-                note with { ModifiedAtUtc = Now() },
-                expectedVersion,
-                remaining,
+        return await RemoveTagsCoreAsync(noteId, tagIds, expectedVersion, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<BatchOperationResult> RemoveTagsAsync(
+        IReadOnlyCollection<Guid> noteIds,
+        IReadOnlyCollection<Guid> tagIds,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(noteIds);
+        ArgumentNullException.ThrowIfNull(tagIds);
+        await using var lease = await _writeGate.EnterWriteAsync(cancellationToken).ConfigureAwait(false);
+        return await RunBatchAsync(
+                noteIds,
+                (noteId, version) => RemoveTagsCoreAsync(noteId, tagIds, version, cancellationToken),
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -154,6 +182,42 @@ public sealed class NoteManagementService
                 cancellationToken)
             .ConfigureAwait(false);
 
+    public async Task<BatchOperationResult> ArchiveAsync(
+        IReadOnlyCollection<Guid> noteIds,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(noteIds);
+        await using var lease = await _writeGate.EnterWriteAsync(cancellationToken).ConfigureAwait(false);
+        return await RunBatchAsync(
+                noteIds,
+                (noteId, version) => ChangeLifecycleCoreAsync(
+                    noteId,
+                    NoteLifecycle.Archived,
+                    NoteDisplayIntent.Hidden,
+                    version,
+                    cancellationToken),
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<BatchOperationResult> MoveToTrashAsync(
+        IReadOnlyCollection<Guid> noteIds,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(noteIds);
+        await using var lease = await _writeGate.EnterWriteAsync(cancellationToken).ConfigureAwait(false);
+        return await RunBatchAsync(
+                noteIds,
+                (noteId, version) => ChangeLifecycleCoreAsync(
+                    noteId,
+                    NoteLifecycle.Trash,
+                    NoteDisplayIntent.Hidden,
+                    version,
+                    cancellationToken),
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     public async Task DeletePermanentlyAsync(
         Guid noteId,
         long expectedVersion,
@@ -198,14 +262,141 @@ public sealed class NoteManagementService
         CancellationToken cancellationToken)
     {
         await using var lease = await _writeGate.EnterWriteAsync(cancellationToken).ConfigureAwait(false);
-        return await _notes.SetLifecycleAndDisplayAsync(
+        return await ChangeLifecycleCoreAsync(
                 noteId,
                 lifecycle,
                 displayIntent,
                 expectedVersion,
-                Now(),
                 cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    private Task<Note> ChangeLifecycleCoreAsync(
+        Guid noteId,
+        NoteLifecycle lifecycle,
+        NoteDisplayIntent displayIntent,
+        long expectedVersion,
+        CancellationToken cancellationToken) =>
+        _notes.SetLifecycleAndDisplayAsync(
+            noteId,
+            lifecycle,
+            displayIntent,
+            expectedVersion,
+            Now(),
+            cancellationToken);
+
+    private async Task<Note> MoveToCategoryCoreAsync(
+        Guid noteId,
+        Guid categoryId,
+        long expectedVersion,
+        CancellationToken cancellationToken)
+    {
+        _ = await _catalog.GetCategoryAsync(categoryId, cancellationToken).ConfigureAwait(false)
+            ?? throw new CatalogNotFoundException(categoryId, "move_note_category");
+        var note = await GetRequiredAsync(noteId, cancellationToken).ConfigureAwait(false);
+        var tags = await _notes.GetTagIdsAsync(noteId, cancellationToken).ConfigureAwait(false);
+        return await _notes.UpdateAsync(
+                note with { CategoryId = categoryId, ModifiedAtUtc = Now() },
+                expectedVersion,
+                tags,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<Note> AddTagsCoreAsync(
+        Guid noteId,
+        IReadOnlyCollection<Guid> tagIds,
+        long expectedVersion,
+        CancellationToken cancellationToken)
+    {
+        foreach (var tagId in tagIds.Distinct())
+        {
+            _ = await _catalog.GetTagAsync(tagId, cancellationToken).ConfigureAwait(false)
+                ?? throw new CatalogNotFoundException(tagId, "add_note_tag");
+        }
+
+        var note = await GetRequiredAsync(noteId, cancellationToken).ConfigureAwait(false);
+        var current = await _notes.GetTagIdsAsync(noteId, cancellationToken).ConfigureAwait(false);
+        var merged = current.Concat(tagIds).Distinct().ToArray();
+        return await _notes.UpdateAsync(
+                note with { ModifiedAtUtc = Now() },
+                expectedVersion,
+                merged,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<Note> RemoveTagsCoreAsync(
+        Guid noteId,
+        IReadOnlyCollection<Guid> tagIds,
+        long expectedVersion,
+        CancellationToken cancellationToken)
+    {
+        var note = await GetRequiredAsync(noteId, cancellationToken).ConfigureAwait(false);
+        var current = await _notes.GetTagIdsAsync(noteId, cancellationToken).ConfigureAwait(false);
+        var remaining = current.Where(id => !tagIds.Contains(id)).ToArray();
+        return await _notes.UpdateAsync(
+                note with { ModifiedAtUtc = Now() },
+                expectedVersion,
+                remaining,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<BatchOperationResult> RunBatchAsync(
+        IReadOnlyCollection<Guid> noteIds,
+        Func<Guid, long, Task<Note>> operation,
+        CancellationToken cancellationToken)
+    {
+        var results = new List<NoteManagementItemResult>();
+        foreach (var noteId in noteIds.Distinct())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var note = await _notes.GetAsync(noteId, cancellationToken).ConfigureAwait(false)
+                    ?? throw new NoteNotFoundException(noteId, "batch_management");
+                var updated = await operation(noteId, note.Version).ConfigureAwait(false);
+                results.Add(new NoteManagementItemResult(
+                    noteId,
+                    NoteManagementItemStatus.Succeeded,
+                    updated,
+                    null,
+                    null));
+            }
+            catch (NoteConcurrencyException exception)
+            {
+                results.Add(new NoteManagementItemResult(
+                    noteId,
+                    NoteManagementItemStatus.Conflict,
+                    null,
+                    exception.ErrorCode,
+                    exception.Message));
+            }
+            catch (NoteNotFoundException exception)
+            {
+                results.Add(new NoteManagementItemResult(
+                    noteId,
+                    NoteManagementItemStatus.NotFound,
+                    null,
+                    exception.ErrorCode,
+                    exception.Message));
+            }
+            catch (Exception exception)
+            {
+                var code = exception is NoteStorageException storage
+                    ? storage.ErrorCode
+                    : exception.GetType().Name;
+                results.Add(new NoteManagementItemResult(
+                    noteId,
+                    NoteManagementItemStatus.Failed,
+                    null,
+                    code,
+                    exception.Message));
+            }
+        }
+
+        return new BatchOperationResult(results);
     }
 
     private async Task<Note> GetRequiredAsync(
