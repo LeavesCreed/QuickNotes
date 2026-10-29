@@ -54,7 +54,7 @@ dotnet run --project QuickNotes_AgentHandoff/src/QuickNotes.Desktop.Wpf/QuickNot
 - 第二实例会尝试激活第一实例；同一数据根只允许一个实例。
 - 只使用临时数据根，不要指向真实用户数据。
 
-测试只使用临时目录与合成数据，不接触真实用户数据。完整结果、未运行项与环境见 [B7 测试报告](docs/agent/B7-测试报告.md) 与 [C1 测试报告](docs/agent/C1-测试报告.md)。
+测试只使用临时目录与合成数据，不接触真实用户数据。完整结果、未运行项与环境见 [B7 测试报告](docs/agent/B7-测试报告.md)、[C1 测试报告](docs/agent/C1-测试报告.md)、[C2 测试报告](docs/agent/C2-测试报告.md)、[C3 测试报告](docs/agent/C3-测试报告.md)。
 
 ## 已实现能力
 
