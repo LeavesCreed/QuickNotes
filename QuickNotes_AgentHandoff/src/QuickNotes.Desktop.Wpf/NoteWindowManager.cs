@@ -11,6 +11,7 @@ public sealed class NoteWindowManager : IAsyncDisposable
     private readonly Dictionary<Guid, NoteWindow> _windows = new();
     private readonly SemaphoreSlim _syncGate = new(1, 1);
     private readonly DispatcherTimer _timer;
+    private readonly WindowPlacementService _placement = new();
     private bool _started;
     private bool _disposed;
 
@@ -56,6 +57,7 @@ public sealed class NoteWindowManager : IAsyncDisposable
             }
 
             var settings = await services.Settings.GetAsync();
+            var bindings = await ReadDisplayBindingsAsync();
             var active = await services.Notes.QueryAsync(new NoteQuery
             {
                 Lifecycle = NoteLifecycle.Active
@@ -91,10 +93,13 @@ public sealed class NoteWindowManager : IAsyncDisposable
                 try
                 {
                     var session = await services.Sessions.GetOrOpenAsync(noteId);
-                    var window = new NoteWindow(_host, session);
+                    var window = new NoteWindow(_host, session, _placement);
                     window.HideRequested += OnHideRequested;
                     window.Closed += OnWindowClosed;
-                    ApplyInitialBounds(window, note, index);
+                    window.ApplyPlacement(
+                        note.WindowLayout,
+                        bindings.TryGetValue(noteId, out var displayId) ? displayId : null,
+                        index - 1);
                     _windows[noteId] = window;
                     window.Show();
                 }
@@ -197,6 +202,53 @@ public sealed class NoteWindowManager : IAsyncDisposable
         }
     }
 
+    public async Task ReapplyPlacementAsync()
+    {
+        if (_disposed || _host.EditingServices is not { } services)
+        {
+            return;
+        }
+
+        var bindings = await ReadDisplayBindingsAsync();
+        foreach (var (noteId, window) in _windows)
+        {
+            try
+            {
+                var note = await services.Notes.GetAsync(noteId);
+                if (note is null)
+                {
+                    continue;
+                }
+
+                window.ApplyPlacement(
+                    note.WindowLayout,
+                    bindings.TryGetValue(noteId, out var displayId) ? displayId : null);
+            }
+            catch (Exception exception)
+            {
+                _host.Log.TryWrite(
+                    "WARN",
+                    "note_windows",
+                    "window placement refresh failed",
+                    exception.GetType().Name);
+            }
+        }
+    }
+
+    private async Task<IReadOnlyDictionary<Guid, string>> ReadDisplayBindingsAsync()
+    {
+        if (_host.DeviceSettings is null)
+        {
+            return new Dictionary<Guid, string>();
+        }
+
+        var result = await _host.DeviceSettings.ReadAsync();
+        return result.Status == QuickNotes.Application.DeviceSettingsReadResultStatus.Found
+            && result.Settings is not null
+            ? result.Settings.DisplayBindings
+            : new Dictionary<Guid, string>();
+    }
+
     private async Task CloseWindowAsync(Guid noteId, NoteWindow window)
     {
         if (!_windows.Remove(noteId))
@@ -258,14 +310,5 @@ public sealed class NoteWindowManager : IAsyncDisposable
         }
 
         _windows.Clear();
-    }
-
-    private static void ApplyInitialBounds(NoteWindow window, Note note, int index)
-    {
-        var layout = note.WindowLayout;
-        window.Width = layout?.Width is > 100 ? layout.Width : 360;
-        window.Height = layout?.Height is > 100 ? layout.Height : 420;
-        window.Left = layout?.Left ?? (60 + ((index - 1) % 8) * 28);
-        window.Top = layout?.Top ?? (60 + ((index - 1) % 8) * 28);
     }
 }

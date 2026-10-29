@@ -56,6 +56,7 @@ public partial class App : System.Windows.Application
         _host = new DesktopApplicationHost(options, startupRegistration: _startupRegistration);
         _host.RestoreApplied += OnRestoreApplied;
         SystemEvents.PowerModeChanged += OnPowerModeChanged;
+        SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
         try
         {
             var result = await _host.StartAsync();
@@ -409,6 +410,7 @@ public partial class App : System.Windows.Application
     protected override void OnExit(ExitEventArgs e)
     {
         SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+        SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
         try
         {
             _noteWindows?.DisposeAsync().AsTask().GetAwaiter().GetResult();
@@ -442,6 +444,16 @@ public partial class App : System.Windows.Application
         {
             _host.Log.TryWrite("WARN", "backup_host", "wake backup check failed", exception.GetType().Name);
         }
+    }
+
+    private async void OnDisplaySettingsChanged(object? sender, EventArgs e)
+    {
+        if (_noteWindows is null)
+        {
+            return;
+        }
+
+        await _noteWindows.ReapplyPlacementAsync();
     }
 
     private void TryLog(string eventName, string message, string errorCode)

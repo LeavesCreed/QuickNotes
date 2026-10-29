@@ -19,18 +19,28 @@ public partial class NoteWindow : Window
 
     private readonly DesktopApplicationHost _host;
     private readonly NoteEditorSession _session;
+    private readonly WindowPlacementService _placement;
     private bool _syncing;
     private bool _allowClose;
     private bool _savingOnHide;
+    private bool _layoutReady;
+    private bool _applyingPlacement;
+    private CancellationTokenSource? _layoutDebounce;
     private ApplicationSettings? _settings;
     private IReadOnlyList<Category> _categories = Array.Empty<Category>();
 
-    public NoteWindow(DesktopApplicationHost host, NoteEditorSession session)
+    public NoteWindow(
+        DesktopApplicationHost host,
+        NoteEditorSession session,
+        WindowPlacementService? placement = null)
     {
         _host = host ?? throw new ArgumentNullException(nameof(host));
         _session = session ?? throw new ArgumentNullException(nameof(session));
+        _placement = placement ?? new WindowPlacementService();
         InitializeComponent();
         _session.StatusChanged += Session_StatusChanged;
+        LocationChanged += NoteWindow_LayoutChanged;
+        SizeChanged += NoteWindow_LayoutChanged;
         Loaded += NoteWindow_Loaded;
         BuildColorMenu();
         BuildFontSizeMenu();
@@ -39,6 +49,22 @@ public partial class NoteWindow : Window
     public Guid NoteId => _session.NoteId;
 
     public NoteEditorSession Session => _session;
+
+    public void ApplyPlacement(
+        NoteWindowLayout? layout,
+        string? preferredDisplayId,
+        int cascadeIndex = 0)
+    {
+        _applyingPlacement = true;
+        try
+        {
+            _placement.ApplyToWindow(this, layout, preferredDisplayId, cascadeIndex);
+        }
+        finally
+        {
+            Dispatcher.BeginInvoke(() => _applyingPlacement = false);
+        }
+    }
 
     public event Action<NoteWindow>? HideRequested;
 
@@ -86,6 +112,7 @@ public partial class NoteWindow : Window
 
     private async void NoteWindow_Loaded(object sender, RoutedEventArgs e)
     {
+        _layoutReady = true;
         try
         {
             await RefreshAsync();
@@ -95,6 +122,76 @@ public partial class NoteWindow : Window
         {
             _host.Log.TryWrite("ERROR", "note_window", "note window load failed", exception.GetType().Name);
         }
+    }
+
+    private void NoteWindow_LayoutChanged(object? sender, EventArgs e)
+    {
+        if (!_layoutReady || _applyingPlacement || _allowClose)
+        {
+            return;
+        }
+
+        _layoutDebounce?.Cancel();
+        _layoutDebounce?.Dispose();
+        var source = new CancellationTokenSource();
+        _layoutDebounce = source;
+        _ = SaveLayoutAfterDelayAsync(source.Token);
+    }
+
+    private async Task SaveLayoutAfterDelayAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(450, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            _session.ChangeLayout(new NoteWindowLayout
+            {
+                Left = Left,
+                Top = Top,
+                Width = Width,
+                Height = Height
+            });
+            await _session.SaveNowAsync();
+            await SaveDisplayBindingAsync();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception exception)
+        {
+            _host.Log.TryWrite("WARN", "note_window", "layout save failed", exception.GetType().Name);
+        }
+    }
+
+    private async Task SaveDisplayBindingAsync()
+    {
+        if (_host.DeviceSettings is not { } store)
+        {
+            return;
+        }
+
+        var displayId = _placement.GetDisplayId(this);
+        if (string.IsNullOrWhiteSpace(displayId))
+        {
+            return;
+        }
+
+        var read = await store.ReadAsync();
+        var current = read.Status == QuickNotes.Application.DeviceSettingsReadResultStatus.Found
+            ? read.Settings
+            : null;
+        var settings = current ?? new DeviceSettings();
+        if (settings.DisplayBindings.TryGetValue(_session.NoteId, out var existing)
+            && string.Equals(existing, displayId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var bindings = new Dictionary<Guid, string>(settings.DisplayBindings)
+        {
+            [_session.NoteId] = displayId
+        };
+        await store.WriteAsync(settings with { DisplayBindings = bindings });
     }
 
     private void Session_StatusChanged(object? sender, EventArgs e)
@@ -443,6 +540,8 @@ public partial class NoteWindow : Window
         if (_allowClose)
         {
             _session.StatusChanged -= Session_StatusChanged;
+            _layoutDebounce?.Cancel();
+            _layoutDebounce?.Dispose();
             base.OnClosing(e);
             return;
         }
