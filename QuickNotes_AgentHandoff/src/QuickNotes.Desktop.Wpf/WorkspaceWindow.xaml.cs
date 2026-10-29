@@ -20,6 +20,7 @@ public partial class WorkspaceWindow : Window
     private bool _closing;
     private bool _restoreFrozen;
     private Guid? _restoreNoteId;
+    private bool _backupSetupShown;
 
     public WorkspaceWindow(DesktopApplicationHost host)
     {
@@ -27,6 +28,7 @@ public partial class WorkspaceWindow : Window
         _services = host.EditingServices
             ?? throw new InvalidOperationException("Editing services are not available.");
         InitializeComponent();
+        BackupButton.IsEnabled = _host.BackupServices is not null;
         Loaded += WorkspaceWindow_Loaded;
     }
 
@@ -49,6 +51,8 @@ public partial class WorkspaceWindow : Window
             {
                 await StartNewAsync();
             }
+
+            await ShowBackupSetupIfNeededAsync();
         }
         catch (Exception exception)
         {
@@ -344,6 +348,61 @@ public partial class WorkspaceWindow : Window
         }
     }
 
+    private void BackupButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_restoreFrozen)
+        {
+            return;
+        }
+
+        if (_host.BackupServices is null)
+        {
+            MessageBox.Show(
+                this,
+                "备份服务尚未就绪。",
+                "QuickNotes",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+
+        var window = new BackupWindow(_host, this)
+        {
+            Owner = this
+        };
+        window.ShowDialog();
+    }
+
+    private async Task ShowBackupSetupIfNeededAsync()
+    {
+        if (_backupSetupShown
+            || _host.BackupServices is null
+            || _restoreFrozen)
+        {
+            return;
+        }
+
+        try
+        {
+            var status = await _host.BackupServices.Host.GetStatusAsync();
+            if (status.AutoBackupConfigured)
+            {
+                return;
+            }
+
+            _backupSetupShown = true;
+            var window = new BackupSetupWindow(_host)
+            {
+                Owner = this
+            };
+            window.Show();
+        }
+        catch (Exception exception)
+        {
+            _host.Log.TryWrite("WARN", "workspace", "backup setup could not be opened", exception.GetType().Name);
+        }
+    }
+
     private async void RefreshButton_Click(object sender, RoutedEventArgs e)
     {
         try
@@ -585,6 +644,7 @@ public partial class WorkspaceWindow : Window
         SaveButton.IsEnabled = !readOnly;
         RefreshButton.IsEnabled = !readOnly;
         DraftsButton.IsEnabled = !readOnly;
+        BackupButton.IsEnabled = !readOnly && _host.BackupServices is not null;
     }
 
     protected override void OnClosing(CancelEventArgs e)

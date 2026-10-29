@@ -28,6 +28,7 @@ public sealed class DesktopApplicationHostTests
         Assert.True(File.Exists(host.Paths.DatabasePath));
         Assert.True(File.Exists(host.Paths.StatePath));
         Assert.NotNull(host.EditingServices);
+        Assert.NotNull(host.BackupServices);
     }
 
     [Fact]
@@ -54,6 +55,7 @@ public sealed class DesktopApplicationHostTests
         var state = await new ApplicationStateStore(paths.StatePath).ReadAsync();
         Assert.Equal(2, state.State!.SchemaVersion);
         Assert.NotNull(host.EditingServices);
+        Assert.NotNull(host.BackupServices);
     }
 
     [Fact]
@@ -72,6 +74,7 @@ public sealed class DesktopApplicationHostTests
         Assert.Equal(StartupReason.DatabaseMissing, result.Assessment.Reason);
         Assert.False(File.Exists(paths.DatabasePath));
         Assert.Null(host.EditingServices);
+        Assert.Null(host.BackupServices);
     }
 
     [Fact]
@@ -90,6 +93,7 @@ public sealed class DesktopApplicationHostTests
         Assert.Equal(StartupMode.WriteBlocked, result.Assessment!.Mode);
         Assert.True(host.WriteGate!.IsBlocked);
         Assert.Null(host.EditingServices);
+        Assert.Null(host.BackupServices);
     }
 
     [Fact]
@@ -108,6 +112,7 @@ public sealed class DesktopApplicationHostTests
         Assert.Equal(StartupMode.Ready, second.Assessment!.Mode);
         Assert.Equal(installationId, second.Assessment.State!.InstallationId);
         Assert.NotNull(secondHost.EditingServices);
+        Assert.NotNull(secondHost.BackupServices);
     }
 
     [Fact]

@@ -1,0 +1,44 @@
+<Window x:Class="QuickNotes.Desktop.Wpf.BackupSetupWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="配置备份目录"
+        Width="560"
+        Height="260"
+        WindowStartupLocation="CenterOwner">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Text="选择用于保存 QuickNotes 备份的目录。备份目录必须与便签数据目录分离。"
+                   TextWrapping="Wrap"
+                   Margin="0,0,0,10" />
+
+        <TextBox x:Name="DirectoryText"
+                 Grid.Row="1"
+                 IsReadOnly="True"
+                 Padding="6"
+                 Margin="0,0,0,10" />
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal">
+            <Button x:Name="ChooseButton" Content="选择目录" Padding="12,6" Margin="0,0,8,0" Click="ChooseButton_Click" />
+            <Button x:Name="SkipButton" Content="稍后配置" Padding="12,6" Click="SkipButton_Click" />
+        </StackPanel>
+
+        <TextBlock x:Name="HintText"
+                   Grid.Row="3"
+                   Margin="0,12,0,0"
+                   Foreground="#666666"
+                   TextWrapping="Wrap"
+                   Text="跳过时不会启用自动备份；你仍可从工作区的“备份与恢复”入口配置。" />
+
+        <TextBlock x:Name="ErrorText"
+                   Grid.Row="4"
+                   Foreground="#A94442"
+                   TextWrapping="Wrap" />
+    </Grid>
+</Window>

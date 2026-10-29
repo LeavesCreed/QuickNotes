@@ -1,0 +1,41 @@
+<Window x:Class="QuickNotes.Desktop.Wpf.RestoreProgressWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="恢复数据库"
+        Width="480"
+        Height="190"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize">
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock x:Name="StageText"
+                   FontWeight="SemiBold"
+                   TextWrapping="Wrap"
+                   Text="准备恢复…" />
+
+        <ProgressBar Grid.Row="1"
+                     IsIndeterminate="True"
+                     Height="8"
+                     Margin="0,14,0,10" />
+
+        <TextBlock x:Name="HintText"
+                   Grid.Row="2"
+                   Foreground="#666666"
+                   TextWrapping="Wrap"
+                   Text="恢复期间请勿关闭应用。" />
+
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button x:Name="CancelButton"
+                    Content="取消"
+                    Padding="12,6"
+                    IsEnabled="False"
+                    Click="CancelButton_Click" />
+        </StackPanel>
+    </Grid>
+</Window>
