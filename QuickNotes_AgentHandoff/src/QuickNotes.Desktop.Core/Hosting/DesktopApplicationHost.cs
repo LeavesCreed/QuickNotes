@@ -19,6 +19,7 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
 {
     private readonly DesktopStartupOptions _options;
     private readonly TimeProvider _timeProvider;
+    private readonly StartupRegistrationService? _startupRegistration;
     private DiagnosticLog? _log;
     private DesktopPaths? _paths;
     private SingleInstanceGuard? _guard;
@@ -34,10 +35,12 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
 
     public DesktopApplicationHost(
         DesktopStartupOptions options,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        StartupRegistrationService? startupRegistration = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _startupRegistration = startupRegistration;
     }
 
     public DesktopPaths Paths => _paths
@@ -53,6 +56,10 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
     public DesktopEditingServices? EditingServices => _editingServices;
 
     public DesktopBackupServices? BackupServices => _backupServices;
+
+    public StartupRegistrationService? StartupRegistration => _startupRegistration;
+
+    public IDeviceSettingsStore? DeviceSettings => _deviceSettings;
 
     public event Action? RestoreApplied;
 
@@ -215,6 +222,12 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
         }
 
         _disposed = true;
+        if (_editingServices is not null)
+        {
+            await _editingServices.Sessions.DisposeAsync().ConfigureAwait(false);
+            _editingServices = null;
+        }
+
         if (_backupServices is not null)
         {
             await _backupServices.Host.DisposeAsync().ConfigureAwait(false);
@@ -255,16 +268,28 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
 
     private void RefreshEditingServices()
     {
+        RefreshEditingServicesAsync().GetAwaiter().GetResult();
+    }
+
+    private async Task RefreshEditingServicesAsync()
+    {
+        if (_editingServices is not null)
+        {
+            await _editingServices.Sessions.DisposeAsync().ConfigureAwait(false);
+            _editingServices = null;
+        }
+
         if (Assessment?.CanEnterNormalUse != true
             || _paths is null
             || _writeGate is null)
         {
-            _editingServices = null;
             return;
         }
 
         var factory = new SqliteConnectionFactory(_paths.DatabasePath);
         var notes = new SqliteNoteRepository(factory);
+        var catalog = new SqliteCatalogRepository(factory);
+        var settings = new SqliteApplicationSettingsRepository(factory);
         var drafts = new FileNoteDraftStore(_paths.DraftDirectory);
         var saves = new NoteSaveCoordinator(
             notes,
@@ -283,12 +308,24 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
             drafts,
             workspace,
             boundaryStore);
+        var management = new NoteManagementService(
+            notes,
+            catalog,
+            _writeGate,
+            _timeProvider);
+        var undo = new ManagementUndoService(notes, _writeGate, _timeProvider);
+        var sessions = new EditorSessionRegistry(workspace);
         _editingServices = new DesktopEditingServices(
             notes,
             drafts,
             saves,
             workspace,
-            recovery);
+            recovery,
+            catalog,
+            management,
+            undo,
+            settings,
+            sessions);
     }
 
     private async Task RefreshBackupServicesAsync(CancellationToken cancellationToken)

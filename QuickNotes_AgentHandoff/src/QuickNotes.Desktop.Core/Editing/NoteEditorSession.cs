@@ -146,6 +146,50 @@ public sealed class NoteEditorSession : IAsyncDisposable
         }
     }
 
+    public Guid CategoryId
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _snapshot.CategoryId;
+            }
+        }
+    }
+
+    public IReadOnlyCollection<Guid> TagIds
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _snapshot.TagIds.ToArray();
+            }
+        }
+    }
+
+    public bool IsPinned
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _snapshot.IsPinned;
+            }
+        }
+    }
+
+    public NoteDisplayIntent DisplayIntent
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _snapshot.DisplayIntent;
+            }
+        }
+    }
+
     public bool HasPendingChanges
     {
         get
@@ -228,6 +272,115 @@ public sealed class NoteEditorSession : IAsyncDisposable
             {
                 Sequence = _snapshot.Sequence + 1,
                 WindowLayout = layout,
+                ModifiedAtUtc = now
+            };
+            MarkModifiedLocked(now);
+        }
+
+        RaiseStatusChanged();
+    }
+
+    public void ChangeCategory(Guid categoryId)
+    {
+        if (categoryId == Guid.Empty)
+        {
+            throw new ArgumentException("Category id must not be empty.", nameof(categoryId));
+        }
+
+        lock (_sync)
+        {
+            ThrowIfDisposed();
+            if (_snapshot.CategoryId == categoryId)
+            {
+                return;
+            }
+
+            var now = _timeProvider.GetUtcNow().ToUniversalTime();
+            _snapshot = _snapshot with
+            {
+                Sequence = _snapshot.Sequence + 1,
+                CategoryId = categoryId,
+                ModifiedAtUtc = now
+            };
+            MarkModifiedLocked(now);
+        }
+
+        RaiseStatusChanged();
+    }
+
+    public void ChangeTags(IReadOnlyCollection<Guid> tagIds)
+    {
+        ArgumentNullException.ThrowIfNull(tagIds);
+        if (tagIds.Any(id => id == Guid.Empty))
+        {
+            throw new ArgumentException("Tag ids must not contain empty values.", nameof(tagIds));
+        }
+
+        var distinct = tagIds.Distinct().ToArray();
+        lock (_sync)
+        {
+            ThrowIfDisposed();
+            if (TagSetsEqual(_snapshot.TagIds, distinct))
+            {
+                return;
+            }
+
+            var now = _timeProvider.GetUtcNow().ToUniversalTime();
+            _snapshot = _snapshot with
+            {
+                Sequence = _snapshot.Sequence + 1,
+                TagIds = distinct,
+                ModifiedAtUtc = now
+            };
+            MarkModifiedLocked(now);
+        }
+
+        RaiseStatusChanged();
+    }
+
+    public void ChangePin(bool isPinned)
+    {
+        lock (_sync)
+        {
+            ThrowIfDisposed();
+            if (_snapshot.IsPinned == isPinned)
+            {
+                return;
+            }
+
+            var now = _timeProvider.GetUtcNow().ToUniversalTime();
+            _snapshot = _snapshot with
+            {
+                Sequence = _snapshot.Sequence + 1,
+                IsPinned = isPinned,
+                ModifiedAtUtc = now
+            };
+            MarkModifiedLocked(now);
+        }
+
+        RaiseStatusChanged();
+    }
+
+    public void ChangeDisplayIntent(NoteDisplayIntent displayIntent)
+    {
+        if (!Enum.IsDefined(displayIntent))
+        {
+            throw new ArgumentOutOfRangeException(nameof(displayIntent));
+        }
+
+        lock (_sync)
+        {
+            ThrowIfDisposed();
+            if (_snapshot.DisplayIntent == displayIntent)
+            {
+                return;
+            }
+
+            var now = _timeProvider.GetUtcNow().ToUniversalTime();
+            _snapshot = _snapshot with
+            {
+                Sequence = _snapshot.Sequence + 1,
+                DisplayIntent = displayIntent,
                 ModifiedAtUtc = now
             };
             MarkModifiedLocked(now);
@@ -671,6 +824,17 @@ public sealed class NoteEditorSession : IAsyncDisposable
             lock (_sync)
             {
                 return _invalidated;
+            }
+        }
+    }
+
+    public bool IsDisposed
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _disposed;
             }
         }
     }

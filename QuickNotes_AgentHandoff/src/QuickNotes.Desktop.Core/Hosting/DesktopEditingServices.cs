@@ -8,4 +8,9 @@ public sealed record DesktopEditingServices(
     INoteDraftStore Drafts,
     INoteSaveCoordinator Saves,
     EditorWorkspaceService Workspace,
-    DraftRecoveryService DraftRecovery);
+    DraftRecoveryService DraftRecovery,
+    ICatalogRepository Catalog,
+    NoteManagementService Management,
+    ManagementUndoService Undo,
+    IApplicationSettingsRepository Settings,
+    EditorSessionRegistry Sessions);

@@ -25,6 +25,16 @@ public sealed class DesktopStartupOptionsTests
     }
 
     [Fact]
+    public void Parse_StartupFlag_EnablesLoginStartupMode()
+    {
+        var startup = DesktopStartupOptions.Parse(new[] { "--startup" });
+        var background = DesktopStartupOptions.Parse(new[] { "--background" });
+
+        Assert.True(startup.StartOnLogin);
+        Assert.True(background.StartOnLogin);
+    }
+
+    [Fact]
     public void Parse_SingleInstanceProbe()
     {
         var options = DesktopStartupOptions.Parse(new[] { "--single-instance-probe" });

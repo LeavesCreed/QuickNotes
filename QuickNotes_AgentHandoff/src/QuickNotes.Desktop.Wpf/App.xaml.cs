@@ -1,12 +1,24 @@
+using System.Reflection;
 using System.Windows;
 using Microsoft.Win32;
 using QuickNotes.Desktop.Hosting;
+using QuickNotes.Desktop.Hotkeys;
+using QuickNotes.Desktop.Startup;
+using QuickNotes.Domain;
 
 namespace QuickNotes.Desktop.Wpf;
 
 public partial class App : System.Windows.Application
 {
     private DesktopApplicationHost? _host;
+    private NoteWindowManager? _noteWindows;
+    private TrayIconService? _tray;
+    private WorkspaceWindow? _workspace;
+    private StartupRegistrationService? _startupRegistration;
+    private GlobalHotkeyService? _hotkeyService;
+    private GlobalHotkeyRegistrationManager? _hotkeyManager;
+    private bool _exiting;
+    private bool _startOnLogin;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -33,9 +45,18 @@ public partial class App : System.Windows.Application
             return;
         }
 
-        _host = new DesktopApplicationHost(options);
+        _startOnLogin = options.StartOnLogin;
+        var executable = Environment.ProcessPath ?? Environment.GetCommandLineArgs()[0];
+        _startupRegistration = new StartupRegistrationService(
+            new WindowsRunRegistry(),
+            "QuickNotes",
+            StartupRegistrationService.BuildCommand(
+                executable,
+                Assembly.GetEntryAssembly()?.Location));
+        _host = new DesktopApplicationHost(options, startupRegistration: _startupRegistration);
         _host.RestoreApplied += OnRestoreApplied;
         SystemEvents.PowerModeChanged += OnPowerModeChanged;
+        SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
         try
         {
             var result = await _host.StartAsync();
@@ -57,13 +78,49 @@ public partial class App : System.Windows.Application
             }
 
             _host.ActivationRequested += OnActivationRequested;
-            var window = result.Assessment?.CanEnterNormalUse == true
-                && _host.EditingServices is not null
-                ? new WorkspaceWindow(_host)
-                : (Window)new StartupWindow(_host);
-            MainWindow = window;
+            var canUseEditing = result.Assessment?.CanEnterNormalUse == true
+                && _host.EditingServices is not null;
+            if (canUseEditing)
+            {
+                _noteWindows = new NoteWindowManager(_host);
+                await _noteWindows.StartAsync();
+                _tray = CreateTray();
+                _workspace = new WorkspaceWindow(_host, _noteWindows, ShutdownAsync);
+                MainWindow = _workspace;
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                if (!_startOnLogin)
+                {
+                    _workspace.Show();
+                }
+                else
+                {
+                    _workspace.Hide();
+                }
+
+                try
+                {
+                    _hotkeyService = new GlobalHotkeyService();
+                    _hotkeyManager = new GlobalHotkeyRegistrationManager(_hotkeyService);
+                    _hotkeyService.Pressed += OnHotkeyPressed;
+                }
+                catch (Exception exception)
+                {
+                    _host.Log.TryWrite(
+                        "ERROR",
+                        "hotkeys",
+                        "hotkey service could not be created",
+                        exception.GetType().Name);
+                }
+
+                await UpdateTrayStateAsync();
+                await ApplyHotkeysAsync(showErrors: true);
+                return;
+            }
+
+            var startupWindow = new StartupWindow(_host);
+            MainWindow = startupWindow;
             ShutdownMode = ShutdownMode.OnMainWindowClose;
-            window.Show();
+            startupWindow.Show();
         }
         catch (Exception exception)
         {
@@ -77,58 +134,294 @@ public partial class App : System.Windows.Application
         }
     }
 
-    private void OnActivationRequested()
+    private TrayIconService CreateTray() =>
+        new(
+            createNote: () => _ = CreateNoteFromTrayAsync(),
+            showWorkspace: ShowWorkspace,
+            toggleGlobalHidden: () => _ = ToggleGlobalHiddenAsync(),
+            showSettings: () => _ = ShowSettingsAsync(),
+            exit: () => _ = ShutdownAsync());
+
+    private async Task CreateNoteFromTrayAsync()
     {
-        Dispatcher.Invoke(() =>
+        ShowWorkspace();
+        if (_workspace is not null)
         {
-            if (MainWindow is not Window window)
+            await _workspace.CreateNewFromTrayAsync();
+        }
+    }
+
+    private void ShowWorkspace()
+    {
+        if (_host?.EditingServices is null)
+        {
+            return;
+        }
+
+        if (_workspace is null)
+        {
+            _workspace = new WorkspaceWindow(_host, _noteWindows, ShutdownAsync);
+            MainWindow = _workspace;
+        }
+
+        _workspace.Show();
+        if (_workspace.WindowState == WindowState.Minimized)
+        {
+            _workspace.WindowState = WindowState.Normal;
+        }
+
+        _workspace.Activate();
+    }
+
+    private async Task ShowSettingsAsync()
+    {
+        ShowWorkspace();
+        _workspace?.OpenSettings();
+        await UpdateTrayStateAsync();
+        if (_noteWindows is not null)
+        {
+            await _noteWindows.RefreshAsync();
+        }
+    }
+
+    private async Task ToggleGlobalHiddenAsync()
+    {
+        if (_host?.EditingServices is not { } services)
+        {
+            return;
+        }
+
+        try
+        {
+            var current = await services.Settings.GetAsync();
+            var updated = current with
+            {
+                GlobalHidden = !current.GlobalHidden,
+                UpdatedAtUtc = DateTimeOffset.UtcNow
+            };
+            await services.Settings.UpdateAsync(updated, current.Version);
+            _tray?.SetGlobalHidden(updated.GlobalHidden);
+            if (_noteWindows is not null)
+            {
+                await _noteWindows.RefreshAsync();
+            }
+        }
+        catch (Exception exception)
+        {
+            _host.Log.TryWrite(
+                "WARN",
+                "tray",
+                "global visibility toggle failed",
+                exception.GetType().Name);
+        }
+    }
+
+    private async Task UpdateTrayStateAsync()
+    {
+        if (_host?.EditingServices is not { } services)
+        {
+            return;
+        }
+
+        try
+        {
+            var settings = await services.Settings.GetAsync();
+            _tray?.SetGlobalHidden(settings.GlobalHidden);
+        }
+        catch (Exception exception)
+        {
+            _host.Log.TryWrite("WARN", "tray", "tray state read failed", exception.GetType().Name);
+        }
+    }
+
+    public async Task NotifySettingsChangedAsync()
+    {
+        await UpdateTrayStateAsync();
+        if (_noteWindows is not null)
+        {
+            await _noteWindows.RefreshSettingsAsync();
+            await _noteWindows.RefreshAsync();
+        }
+
+        await ApplyHotkeysAsync(showErrors: true);
+    }
+
+    private async Task ApplyHotkeysAsync(bool showErrors)
+    {
+        if (_hotkeyService is null || _hotkeyManager is null || _host?.DeviceSettings is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var device = await _host.DeviceSettings.ReadAsync();
+            var settings = device.Status == QuickNotes.Application.DeviceSettingsReadResultStatus.Found
+                ? device.Settings?.Hotkeys ?? HotkeySettings.Default
+                : HotkeySettings.Default;
+            var results = _hotkeyManager.Apply(settings);
+            var failures = results.Where(result => result.ErrorCode is not null).ToArray();
+            if (failures.Length == 0)
             {
                 return;
             }
 
-            if (window.WindowState == WindowState.Minimized)
+            var message = string.Join(
+                Environment.NewLine,
+                failures.Select(result => $"{result.Action}: {result.ErrorCode}"));
+            _host.Log.TryWrite("WARN", "hotkeys", "hotkey registration failed", message);
+            if (showErrors)
             {
-                window.WindowState = WindowState.Normal;
+                var owner = _workspace is { IsVisible: true } ? _workspace : null;
+                MessageBox.Show(
+                    owner,
+                    "以下全局快捷键未启用（可能与其他程序冲突）：" + Environment.NewLine + message,
+                    "QuickNotes",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
             }
+        }
+        catch (Exception exception)
+        {
+            _host.Log.TryWrite("WARN", "hotkeys", "hotkey apply failed", exception.GetType().Name);
+        }
+    }
 
-            window.Show();
-            window.Activate();
-        });
+    private void OnHotkeyPressed(object? sender, GlobalHotkeyAction action)
+    {
+        switch (action)
+        {
+            case GlobalHotkeyAction.NewNote:
+                _ = CreateNoteFromTrayAsync();
+                break;
+            case GlobalHotkeyAction.OpenManagementCenter:
+                ShowWorkspace();
+                break;
+            case GlobalHotkeyAction.ToggleGlobalHidden:
+                _ = ToggleGlobalHiddenAsync();
+                break;
+        }
+    }
+
+    private async void OnActivationRequested()
+    {
+        await Dispatcher.InvokeAsync(ShowWorkspace);
     }
 
     private void OnRestoreApplied()
     {
-        Dispatcher.Invoke(() =>
+        _ = Dispatcher.InvokeAsync(async () =>
         {
-            if (_host is null)
+            if (_host is null || _exiting)
             {
                 return;
             }
 
             var oldWindow = MainWindow;
-            var window = _host.Assessment?.CanEnterNormalUse == true
-                && _host.EditingServices is not null
-                ? new WorkspaceWindow(_host)
-                : (Window)new StartupWindow(_host);
-            MainWindow = window;
-            window.Show();
-            if (oldWindow is WorkspaceWindow workspace)
+            var oldNoteWindows = _noteWindows;
+            _noteWindows = null;
+            try
             {
-                workspace.CloseAfterRestore();
+                if (oldNoteWindows is not null)
+                {
+                    await oldNoteWindows.DisposeAsync();
+                }
+
+                var canUseEditing = _host.Assessment?.CanEnterNormalUse == true
+                    && _host.EditingServices is not null;
+                if (canUseEditing)
+                {
+                    _noteWindows = new NoteWindowManager(_host);
+                    await _noteWindows.StartAsync();
+                }
+
+                var window = canUseEditing
+                    ? new WorkspaceWindow(_host, _noteWindows, ShutdownAsync)
+                    : (Window)new StartupWindow(_host);
+                MainWindow = window;
+                _workspace = window as WorkspaceWindow;
+                window.Show();
+                if (oldWindow is WorkspaceWindow workspace)
+                {
+                    workspace.CloseAfterRestore();
+                }
+                else
+                {
+                    oldWindow?.Close();
+                }
+
+                await UpdateTrayStateAsync();
             }
-            else
+            catch (Exception exception)
             {
-                oldWindow?.Close();
+                TryLog("restore", "window rebuild failed", exception.GetType().Name);
             }
         });
+    }
+
+    private async Task ShutdownAsync()
+    {
+        if (_exiting)
+        {
+            return;
+        }
+
+        _exiting = true;
+        try
+        {
+            if (_workspace is not null)
+            {
+                var prepared = await _workspace.PrepareForExitAsync();
+                if (!prepared)
+                {
+                    _exiting = false;
+                    MessageBox.Show(
+                        _workspace,
+                        "当前便签未能保存，应用未退出。请先处理保存失败或冲突。",
+                        "QuickNotes",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                    return;
+                }
+            }
+
+            if (_noteWindows is not null)
+            {
+                await _noteWindows.DisposeAsync();
+                _noteWindows = null;
+            }
+
+            _tray?.Dispose();
+            _tray = null;
+            _hotkeyService?.Dispose();
+            _hotkeyService = null;
+            _host?.Dispose();
+            _host = null;
+        }
+        catch (Exception exception)
+        {
+            TryLog("shutdown", "shutdown failed", exception.GetType().Name);
+        }
+        finally
+        {
+            Shutdown();
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
         SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+        SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
         try
         {
+            _noteWindows?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            _noteWindows = null;
+            _tray?.Dispose();
+            _tray = null;
+            _hotkeyService?.Dispose();
+            _hotkeyService = null;
             _host?.Dispose();
+            _host = null;
         }
         catch
         {
@@ -152,6 +445,16 @@ public partial class App : System.Windows.Application
         {
             _host.Log.TryWrite("WARN", "backup_host", "wake backup check failed", exception.GetType().Name);
         }
+    }
+
+    private async void OnDisplaySettingsChanged(object? sender, EventArgs e)
+    {
+        if (_noteWindows is null)
+        {
+            return;
+        }
+
+        await _noteWindows.ReapplyPlacementAsync();
     }
 
     private void TryLog(string eventName, string message, string errorCode)

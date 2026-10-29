@@ -1,0 +1,30 @@
+<Window x:Class="QuickNotes.Desktop.Wpf.CloseChoiceWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="关闭 QuickNotes"
+        Width="420"
+        Height="210"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False">
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <TextBlock Text="关闭管理中心后要如何处理？"
+                   FontWeight="SemiBold"
+                   FontSize="15" />
+        <TextBlock Grid.Row="1"
+                   Margin="0,10,0,0"
+                   TextWrapping="Wrap"
+                   Foreground="#555555"
+                   Text="缩小到托盘会保留桌面便签和后台快捷键；退出应用会先保存当前便签。" />
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="缩小到托盘" Padding="12,6" Margin="0,0,8,0" Click="MinimizeButton_Click" />
+            <Button Content="退出应用" Padding="12,6" Margin="0,0,8,0" Click="ExitButton_Click" />
+            <Button Content="取消" Padding="12,6" IsCancel="True" Click="CancelButton_Click" />
+        </StackPanel>
+    </Grid>
+</Window>

@@ -232,6 +232,48 @@ public sealed class SqliteCatalogRepositoryTests
         Assert.Equal(before, await ReadSequenceAsync(database.Factory));
     }
 
+    [Fact]
+    public async Task ListCategoriesAndTags_ReturnStableOrder()
+    {
+        using var database = await TestDatabase.CreateAsync();
+        await CreateCategoryAsync(database, "beta");
+        await CreateCategoryAsync(database, "Alpha");
+        await database.Catalog.CreateTagAsync(new Tag { Id = Guid.NewGuid(), Name = "zeta" });
+        await database.Catalog.CreateTagAsync(new Tag { Id = Guid.NewGuid(), Name = "Alpha-tag" });
+
+        var categories = await database.Catalog.ListCategoriesAsync();
+        var tags = await database.Catalog.ListTagsAsync();
+
+        Assert.True(categories[0].IsSystem);
+        Assert.Equal(
+            new[] { "Alpha", "beta" },
+            categories.Skip(1).Select(category => category.Name));
+        Assert.Equal(
+            new[] { "Alpha-tag", "zeta" },
+            tags.Select(tag => tag.Name));
+    }
+
+    [Fact]
+    public async Task MergeTag_ReassignsLinksAndRemovesSource_Advances()
+    {
+        using var database = await TestDatabase.CreateAsync();
+        var source = new Tag { Id = Guid.NewGuid(), Name = "source" };
+        var target = new Tag { Id = Guid.NewGuid(), Name = "target" };
+        await database.Catalog.CreateTagAsync(source);
+        await database.Catalog.CreateTagAsync(target);
+        var note = TestData.NewNote();
+        await database.Notes.CreateAsync(note, new[] { source.Id });
+        var before = await ReadSequenceAsync(database.Factory);
+
+        await database.Catalog.MergeTagAsync(source.Id, target.Id);
+
+        Assert.Null(await database.Catalog.GetTagAsync(source.Id));
+        Assert.Equal(
+            new[] { target.Id },
+            await database.Notes.GetTagIdsAsync(note.Id));
+        Assert.Equal(before + 1, await ReadSequenceAsync(database.Factory));
+    }
+
     private static async Task<Category> CreateCategoryAsync(TestDatabase database, string name)
     {
         var category = new Category

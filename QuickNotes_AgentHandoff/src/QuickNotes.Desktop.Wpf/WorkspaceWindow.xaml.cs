@@ -13,6 +13,8 @@ public partial class WorkspaceWindow : Window
 {
     private readonly DesktopApplicationHost _host;
     private readonly DesktopEditingServices _services;
+    private readonly NoteWindowManager? _noteWindows;
+    private readonly Func<Task>? _exitApplication;
     private NoteEditorSession? _session;
     private bool _loadingEditor;
     private bool _suppressSelection;
@@ -21,14 +23,34 @@ public partial class WorkspaceWindow : Window
     private bool _restoreFrozen;
     private Guid? _restoreNoteId;
     private bool _backupSetupShown;
+    private IReadOnlyList<Category> _categories = Array.Empty<Category>();
+    private IReadOnlyList<Tag> _tags = Array.Empty<Tag>();
+    private NavKind _navKind = NavKind.Active;
+    private ManagementUndoToken? _lastUndoToken;
+    private CancellationTokenSource? _searchDebounce;
+    private Guid? _categoryFilterId;
 
-    public WorkspaceWindow(DesktopApplicationHost host)
+    public WorkspaceWindow(
+        DesktopApplicationHost host,
+        NoteWindowManager? noteWindows = null,
+        Func<Task>? exitApplication = null)
     {
         _host = host ?? throw new ArgumentNullException(nameof(host));
         _services = host.EditingServices
             ?? throw new InvalidOperationException("Editing services are not available.");
+        _noteWindows = noteWindows;
+        _exitApplication = exitApplication;
         InitializeComponent();
         BackupButton.IsEnabled = _host.BackupServices is not null;
+        _suppressSelection = true;
+        NavigationList.ItemsSource = new[]
+        {
+            new NavItem("全部便签", NavKind.Active),
+            new NavItem("已归档", NavKind.Archived),
+            new NavItem("回收站", NavKind.Trash)
+        };
+        NavigationList.SelectedIndex = 0;
+        _suppressSelection = false;
         Loaded += WorkspaceWindow_Loaded;
     }
 
@@ -36,6 +58,7 @@ public partial class WorkspaceWindow : Window
     {
         try
         {
+            await LoadCatalogsAsync();
             await RefreshNotesAsync();
             if (NotesList.Items.Count > 0)
             {
@@ -47,7 +70,7 @@ public partial class WorkspaceWindow : Window
                     await OpenNoteAsync(item.Id);
                 }
             }
-            else
+            else if (_navKind == NavKind.Active)
             {
                 await StartNewAsync();
             }
@@ -61,17 +84,137 @@ public partial class WorkspaceWindow : Window
         }
     }
 
-    private async Task RefreshNotesAsync()
+    private async Task LoadCatalogsAsync()
     {
-        var notes = await _services.Workspace.ListActiveAsync();
-        var items = notes.Select(ToItem).ToArray();
-        var selectedId = _session?.NoteId;
+        var categories = await _services.Catalog.ListCategoriesAsync();
+        var tags = await _services.Catalog.ListTagsAsync();
+        _categories = categories;
+        _tags = tags;
+        var filterItems = new[] { new CategoryFilterItem(null, "全部分类") }
+            .Concat(categories.Select(category => new CategoryFilterItem(category.Id, category.Name)))
+            .ToArray();
+        _loadingEditor = true;
         _suppressSelection = true;
-        NotesList.ItemsSource = items;
-        NotesList.SelectedItem = selectedId is null
-            ? null
-            : items.FirstOrDefault(item => item.Id == selectedId);
+        CategoryFilterCombo.ItemsSource = filterItems;
+        CategoryFilterCombo.SelectedItem = _categoryFilterId is null
+            ? filterItems[0]
+            : filterItems.FirstOrDefault(item => item.Id == _categoryFilterId) ?? filterItems[0];
+        CategoryEditorCombo.ItemsSource = categories;
+        BatchCategoryCombo.ItemsSource = categories;
+        ColorModeCombo.ItemsSource = new[]
+        {
+            new ColorModeItem(NoteColorMode.FollowCategory, "跟随分类"),
+            new ColorModeItem(NoteColorMode.Manual, "手动颜色")
+        };
+        TagFilterList.ItemsSource = tags;
+        TagsEditorList.ItemsSource = tags;
+        BatchTagCombo.ItemsSource = tags;
         _suppressSelection = false;
+        _loadingEditor = false;
+        SyncEditorCatalogSelections();
+    }
+
+    private void SyncEditorCatalogSelections()
+    {
+        if (_session is null)
+        {
+            return;
+        }
+
+        _loadingEditor = true;
+        CategoryEditorCombo.SelectedItem = _categories
+            .FirstOrDefault(category => category.Id == _session.CategoryId);
+        TagsEditorList.SelectedItems.Clear();
+        foreach (var tagId in _session.TagIds)
+        {
+            var tag = _tags.FirstOrDefault(candidate => candidate.Id == tagId);
+            if (tag is not null)
+            {
+                TagsEditorList.SelectedItems.Add(tag);
+            }
+        }
+
+        PinCheckBox.IsChecked = _session.IsPinned;
+        var colorMode = ColorModeCombo.Items
+            .OfType<ColorModeItem>()
+            .FirstOrDefault(item => item.Mode == _session.ColorMode);
+        ColorModeCombo.SelectedItem = colorMode;
+        ColorHexBox.Text = _session.ColorHex ?? string.Empty;
+        ColorHexBox.IsEnabled = _session.ColorMode == NoteColorMode.Manual;
+        FontSizeBox.Text = _session.FontSize?.ToString() ?? string.Empty;
+        _loadingEditor = false;
+    }
+
+    private NoteQuery BuildQuery() => new()
+    {
+        Lifecycle = _navKind switch
+        {
+            NavKind.Archived => NoteLifecycle.Archived,
+            NavKind.Trash => NoteLifecycle.Trash,
+            _ => IncludeArchivedCheckBox.IsChecked == true ? null : NoteLifecycle.Active
+        },
+        IncludeArchived = IncludeArchivedCheckBox.IsChecked == true,
+        CategoryId = (CategoryFilterCombo.SelectedItem as CategoryFilterItem)?.Id,
+        AnyTagIds = TagFilterList.SelectedItems
+            .OfType<Tag>()
+            .Select(tag => tag.Id)
+            .ToArray(),
+        SearchText = string.IsNullOrWhiteSpace(SearchBox.Text) ? null : SearchBox.Text.Trim(),
+        Sort = NoteSortOrder.ModifiedDescending
+    };
+
+    private async Task RefreshNotesAsync(bool clearMissingSession = false)
+    {
+        try
+        {
+            var notes = await _services.Management.QueryAsync(BuildQuery());
+            var items = notes.Select(ToItem).ToArray();
+            var selectedId = _session?.NoteId;
+            _suppressSelection = true;
+            NotesList.ItemsSource = items;
+            var selected = selectedId is null
+                ? null
+                : items.FirstOrDefault(item => item.Id == selectedId);
+            NotesList.SelectedItem = selected;
+            _suppressSelection = false;
+            EmptyStateText.Visibility = items.Length == 0
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+            if (clearMissingSession && _session is not null && selected is null)
+            {
+                await DisposeCurrentSessionAsync();
+                TitleBox.Text = string.Empty;
+                BodyBox.Text = string.Empty;
+                UpdateStatus();
+            }
+
+            UpdateSelectionText();
+            UpdateButtons();
+        }
+        catch (Exception exception)
+        {
+            ShowError("刷新便签列表失败", exception);
+        }
+    }
+
+    private async Task DisposeCurrentSessionAsync()
+    {
+        if (_session is null)
+        {
+            return;
+        }
+
+        _session.StatusChanged -= Session_StatusChanged;
+        var noteId = _session.NoteId;
+        _session = null;
+        try
+        {
+            await _services.Sessions.ReleaseAsync(noteId);
+        }
+        catch (Exception exception)
+        {
+            _host.Log.TryWrite("ERROR", "workspace", "editor session release failed", exception.GetType().Name);
+        }
     }
 
     private async Task StartNewAsync()
@@ -83,11 +226,16 @@ public partial class WorkspaceWindow : Window
 
         try
         {
-            var session = await _services.Workspace.CreateNewAsync();
+            var session = await _services.Sessions.CreateNewAsync();
             await BindSessionAsync(session);
             _suppressSelection = true;
             NotesList.SelectedItem = null;
             _suppressSelection = false;
+            if (_noteWindows is not null)
+            {
+                await _noteWindows.OpenNewSessionAsync(session);
+            }
+
             UpdateStatus();
         }
         catch (Exception exception)
@@ -111,16 +259,14 @@ public partial class WorkspaceWindow : Window
 
         try
         {
-            var session = await _services.Workspace.OpenAsync(noteId);
-            if (session is null)
-            {
-                MessageBox.Show(this, "该便签已不存在。", "QuickNotes", MessageBoxButton.OK, MessageBoxImage.Warning);
-                await RefreshNotesAsync();
-                SelectSessionItem();
-                return;
-            }
-
+            var session = await _services.Sessions.GetOrOpenAsync(noteId);
             await BindSessionAsync(session);
+        }
+        catch (NoteNotFoundException)
+        {
+            MessageBox.Show(this, "该便签已不存在。", "QuickNotes", MessageBoxButton.OK, MessageBoxImage.Warning);
+            await RefreshNotesAsync();
+            SelectSessionItem();
         }
         catch (Exception exception)
         {
@@ -131,17 +277,17 @@ public partial class WorkspaceWindow : Window
 
     private async Task BindSessionAsync(NoteEditorSession session)
     {
-        if (_session is not null)
+        if (ReferenceEquals(_session, session))
+        {
+            return;
+        }
+
+        if (_session is not null && !ReferenceEquals(_session, session))
         {
             _session.StatusChanged -= Session_StatusChanged;
-            try
-            {
-                await _session.DisposeAsync();
-            }
-            catch (Exception exception)
-            {
-                _host.Log.TryWrite("ERROR", "workspace", "editor session dispose failed", exception.GetType().Name);
-            }
+            var previousNoteId = _session.NoteId;
+            _session = null;
+            await _services.Sessions.ReleaseAsync(previousNoteId);
         }
 
         _session = session;
@@ -149,6 +295,25 @@ public partial class WorkspaceWindow : Window
         _loadingEditor = true;
         TitleBox.Text = session.Title ?? string.Empty;
         BodyBox.Text = session.Body;
+        CategoryEditorCombo.SelectedItem = _categories
+            .FirstOrDefault(category => category.Id == session.CategoryId);
+        PinCheckBox.IsChecked = session.IsPinned;
+        ColorModeCombo.SelectedItem = ColorModeCombo.Items
+            .OfType<ColorModeItem>()
+            .FirstOrDefault(item => item.Mode == session.ColorMode);
+        ColorHexBox.Text = session.ColorHex ?? string.Empty;
+        ColorHexBox.IsEnabled = session.ColorMode == NoteColorMode.Manual;
+        FontSizeBox.Text = session.FontSize?.ToString() ?? string.Empty;
+        TagsEditorList.SelectedItems.Clear();
+        foreach (var tagId in session.TagIds)
+        {
+            var tag = _tags.FirstOrDefault(candidate => candidate.Id == tagId);
+            if (tag is not null)
+            {
+                TagsEditorList.SelectedItems.Add(tag);
+            }
+        }
+
         _loadingEditor = false;
         SelectSessionItem();
         UpdateStatus();
@@ -198,7 +363,66 @@ public partial class WorkspaceWindow : Window
 
     private void Session_StatusChanged(object? sender, EventArgs e)
     {
-        Dispatcher.BeginInvoke(UpdateStatus);
+        Dispatcher.BeginInvoke(() =>
+        {
+            ApplySessionStateFromCurrent();
+            UpdateStatus();
+            if (_session?.Status.SaveState == EditorSaveState.Saved)
+            {
+                _ = RefreshNotesAsync();
+            }
+        });
+    }
+
+    private void ApplySessionStateFromCurrent()
+    {
+        if (_loadingEditor || _session is null || _session.IsDisposed)
+        {
+            return;
+        }
+
+        _loadingEditor = true;
+        try
+        {
+            var title = _session.Title ?? string.Empty;
+            if (!string.Equals(TitleBox.Text, title, StringComparison.Ordinal))
+            {
+                TitleBox.Text = title;
+            }
+
+            if (!string.Equals(BodyBox.Text, _session.Body, StringComparison.Ordinal))
+            {
+                BodyBox.Text = _session.Body;
+            }
+
+            var category = _categories
+                .FirstOrDefault(candidate => candidate.Id == _session.CategoryId);
+            if (!ReferenceEquals(CategoryEditorCombo.SelectedItem, category))
+            {
+                CategoryEditorCombo.SelectedItem = category;
+            }
+
+            PinCheckBox.IsChecked = _session.IsPinned;
+            ColorModeCombo.SelectedItem = ColorModeCombo.Items
+                .OfType<ColorModeItem>()
+                .FirstOrDefault(item => item.Mode == _session.ColorMode);
+            ColorHexBox.Text = _session.ColorHex ?? string.Empty;
+            ColorHexBox.IsEnabled = _session.ColorMode == NoteColorMode.Manual;
+            FontSizeBox.Text = _session.FontSize?.ToString() ?? string.Empty;
+            TagsEditorList.SelectedItems.Clear();
+            foreach (var tagId in _session.TagIds)
+            {
+                var tag = _tags.FirstOrDefault(candidate => candidate.Id == tagId);
+                if (tag is not null)
+                {
+                    TagsEditorList.SelectedItems.Add(tag);
+                }
+            }
+        }
+        finally
+        {
+            _loadingEditor = false;
+        }
     }
 
     private async void NotesList_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -208,12 +432,52 @@ public partial class WorkspaceWindow : Window
             return;
         }
 
-        if (NotesList.SelectedItem is not NoteListItem item || _session?.NoteId == item.Id)
+        UpdateSelectionText();
+        UpdateButtons();
+        var selected = NotesList.SelectedItems.OfType<NoteListItem>().ToArray();
+        if (selected.Length != 1 || _session?.NoteId == selected[0].Id)
         {
             return;
         }
 
-        await OpenNoteAsync(item.Id);
+        await OpenNoteAsync(selected[0].Id);
+    }
+
+    private void UpdateSelectionText()
+    {
+        var count = NotesList.SelectedItems.Count;
+        SelectionText.Text = count switch
+        {
+            0 => "未选择便签",
+            1 => "已选择 1 张便签",
+            _ => $"已选择 {count} 张便签"
+        };
+    }
+
+    private void UpdateButtons()
+    {
+        var selected = NotesList.SelectedItems.OfType<NoteListItem>().ToArray();
+        var hasSelection = selected.Length > 0;
+        var single = selected.Length == 1;
+        ArchiveButton.IsEnabled = !_restoreFrozen && _navKind == NavKind.Active && single;
+        TrashButton.IsEnabled = !_restoreFrozen && _navKind == NavKind.Active && single;
+        RestoreButton.IsEnabled = !_restoreFrozen
+            && (_navKind == NavKind.Archived || _navKind == NavKind.Trash)
+            && single;
+        DeleteButton.IsEnabled = !_restoreFrozen && _navKind == NavKind.Trash && single;
+        CopyButton.IsEnabled = !_restoreFrozen && single;
+        ToggleDisplayButton.IsEnabled = !_restoreFrozen && single && _session is not null;
+        ToggleDisplayButton.Content = _session?.DisplayIntent == NoteDisplayIntent.Visible
+            ? "隐藏便签"
+            : "显示便签";
+        UndoButton.IsEnabled = !_restoreFrozen && _lastUndoToken is not null;
+        BatchArchiveButton.IsEnabled = !_restoreFrozen && _navKind == NavKind.Active && hasSelection;
+        BatchTrashButton.IsEnabled = !_restoreFrozen && _navKind == NavKind.Active && hasSelection;
+        BatchMoveCategoryButton.IsEnabled = !_restoreFrozen && hasSelection;
+        BatchAddTagButton.IsEnabled = !_restoreFrozen && hasSelection;
+        BatchRemoveTagButton.IsEnabled = !_restoreFrozen && hasSelection;
+        ManageCategoriesButton.IsEnabled = !_restoreFrozen;
+        ManageTagsButton.IsEnabled = !_restoreFrozen;
     }
 
     private void UpdateStatus()
@@ -226,6 +490,15 @@ public partial class WorkspaceWindow : Window
             ConflictPanel.Visibility = Visibility.Collapsed;
             RetrySaveButton.Visibility = Visibility.Collapsed;
             RetryDraftButton.Visibility = Visibility.Collapsed;
+            _loadingEditor = true;
+            CategoryEditorCombo.SelectedItem = null;
+            TagsEditorList.SelectedItems.Clear();
+            PinCheckBox.IsChecked = false;
+            ColorModeCombo.SelectedItem = null;
+            ColorHexBox.Text = string.Empty;
+            FontSizeBox.Text = string.Empty;
+            _loadingEditor = false;
+            UpdateButtons();
             return;
         }
 
@@ -262,6 +535,7 @@ public partial class WorkspaceWindow : Window
             ? Visibility.Visible
             : Visibility.Collapsed;
         SaveButton.IsEnabled = !_closing && !_restoreFrozen && status.SaveState != EditorSaveState.Saving;
+        UpdateButtons();
     }
 
     private static string SaveStateText(EditorSaveState state) => state switch
@@ -314,6 +588,665 @@ public partial class WorkspaceWindow : Window
         {
             _host.Log.TryWrite("ERROR", "workspace", "focus loss save failed", exception.GetType().Name);
         }
+    }
+
+    private async void WorkspaceWindow_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.N)
+        {
+            e.Handled = true;
+            await StartNewAsync();
+            return;
+        }
+
+        if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.F)
+        {
+            e.Handled = true;
+            SearchBox.Focus();
+            SearchBox.SelectAll();
+            return;
+        }
+
+        if (e.Key == Key.Escape)
+        {
+            if (SearchBox.IsKeyboardFocusWithin && !string.IsNullOrEmpty(SearchBox.Text))
+            {
+                SearchBox.Clear();
+                e.Handled = true;
+            }
+            else if (Keyboard.FocusedElement is TextBox)
+            {
+                NotesList.Focus();
+                e.Handled = true;
+            }
+        }
+    }
+
+    private async void NavigationList_SelectionChanged(object sender, SelectionChangedEventArgs e)    {
+        if (_suppressSelection || NavigationList.SelectedItem is not NavItem item)
+        {
+            return;
+        }
+
+        _navKind = item.Kind;
+        await RefreshNotesAsync(clearMissingSession: true);
+        await SelectFirstAndOpenAsync();
+    }
+
+    private async void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!IsLoaded)
+        {
+            return;
+        }
+
+        _searchDebounce?.Cancel();
+        _searchDebounce?.Dispose();
+        var source = new CancellationTokenSource();
+        _searchDebounce = source;
+        var text = SearchBox.Text;
+        try
+        {
+            await Task.Delay(250, source.Token);
+            if (!source.IsCancellationRequested && string.Equals(text, SearchBox.Text, StringComparison.Ordinal))
+            {
+                await RefreshNotesAsync();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private async void IncludeArchivedCheckBox_Click(object sender, RoutedEventArgs e) =>
+        await RefreshNotesAsync();
+
+    private async void CategoryFilterCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressSelection || !IsLoaded)
+        {
+            return;
+        }
+
+        _categoryFilterId = (CategoryFilterCombo.SelectedItem as CategoryFilterItem)?.Id;
+        await RefreshNotesAsync();
+    }
+
+    private async void TagFilterList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressSelection || !IsLoaded)
+        {
+            return;
+        }
+
+        await RefreshNotesAsync();
+    }
+
+    private void CategoryEditorCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingEditor || _session is null || CategoryEditorCombo.SelectedItem is not Category category)
+        {
+            return;
+        }
+
+        _session.ChangeCategory(category.Id);
+        UpdateStatus();
+    }
+
+    private void TagsEditorList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingEditor || _session is null)
+        {
+            return;
+        }
+
+        _session.ChangeTags(
+            TagsEditorList.SelectedItems.OfType<Tag>().Select(tag => tag.Id).ToArray());
+        UpdateStatus();
+    }
+
+    private void PinCheckBox_Click(object sender, RoutedEventArgs e)
+    {
+        if (_loadingEditor || _session is null)
+        {
+            return;
+        }
+
+        _session.ChangePin(PinCheckBox.IsChecked == true);
+        UpdateStatus();
+    }
+
+    private void ColorModeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingEditor || _session is null || ColorModeCombo.SelectedItem is not ColorModeItem item)
+        {
+            return;
+        }
+
+        ColorHexBox.IsEnabled = item.Mode == NoteColorMode.Manual;
+        ApplyAppearance();
+    }
+
+    private void AppearanceBox_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e) =>
+        ApplyAppearance();
+
+    private void ApplyAppearance()
+    {
+        if (_loadingEditor || _session is null || ColorModeCombo.SelectedItem is not ColorModeItem item)
+        {
+            return;
+        }
+
+        int? fontSize = null;
+        if (!string.IsNullOrWhiteSpace(FontSizeBox.Text))
+        {
+            if (!int.TryParse(FontSizeBox.Text.Trim(), out var parsed))
+            {
+                MessageBox.Show(this, "字号必须是数字。", "QuickNotes", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            fontSize = parsed;
+        }
+
+        var colorHex = item.Mode == NoteColorMode.Manual
+            ? ColorHexBox.Text.Trim()
+            : null;
+        try
+        {
+            _session.ChangeAppearance(item.Mode, colorHex, fontSize);
+            UpdateStatus();
+        }
+        catch (ArgumentException exception)
+        {
+            MessageBox.Show(
+                this,
+                exception.Message,
+                "QuickNotes",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+    }
+
+    private async Task SelectFirstAndOpenAsync()
+    {
+        if (NotesList.Items.Count == 0)
+        {
+            return;
+        }
+
+        _suppressSelection = true;
+        NotesList.SelectedIndex = 0;
+        _suppressSelection = false;
+        if (NotesList.SelectedItem is NoteListItem item)
+        {
+            await OpenNoteAsync(item.Id);
+        }
+    }
+
+    private async Task SelectNoteAsync(Guid noteId)
+    {
+        var item = NotesList.Items.OfType<NoteListItem>().FirstOrDefault(candidate => candidate.Id == noteId);
+        if (item is null)
+        {
+            return;
+        }
+
+        _suppressSelection = true;
+        NotesList.SelectedItem = item;
+        _suppressSelection = false;
+        await OpenNoteAsync(noteId);
+    }
+
+    private async Task<bool> SaveCurrentBeforeManagementAsync()
+    {
+        if (_session is null || !_session.HasPendingChanges)
+        {
+            return true;
+        }
+
+        try
+        {
+            await _session.FlushDraftAsync();
+            var result = await _session.SaveNowAsync();
+            if (result.Status == SaveStatus.Saved && !_session.HasPendingChanges)
+            {
+                return true;
+            }
+        }
+        catch (Exception exception)
+        {
+            _host.Log.TryWrite("ERROR", "workspace", "management save failed", exception.GetType().Name);
+        }
+
+        MessageBox.Show(
+            this,
+            "当前便签未能保存，无法执行管理操作。请先处理保存失败、冲突或未知结果。",
+            "QuickNotes",
+            MessageBoxButton.OK,
+            MessageBoxImage.Warning);
+        return false;
+    }
+
+    private Guid[] SelectedNoteIds() =>
+        NotesList.SelectedItems
+            .OfType<NoteListItem>()
+            .Select(item => item.Id)
+            .Distinct()
+            .ToArray();
+
+    private async Task RefreshAfterManagementAsync(bool clearMissingSession = true)
+    {
+        await LoadCatalogsAsync();
+        await RefreshNotesAsync(clearMissingSession);
+        if (NotesList.Items.Count > 0 && NotesList.SelectedItems.Count == 0)
+        {
+            _suppressSelection = true;
+            NotesList.SelectedIndex = 0;
+            _suppressSelection = false;
+        }
+
+        UpdateSelectionText();
+        UpdateButtons();
+        if (_noteWindows is not null)
+        {
+            await _noteWindows.RefreshAsync();
+        }
+    }
+
+    private void ShowBatchResult(BatchOperationResult result)
+    {
+        if (!result.HasFailures)
+        {
+            return;
+        }
+
+        var failures = result.Items
+            .Where(item => item.Status != NoteManagementItemStatus.Succeeded)
+            .Select(item => $"{item.NoteId}: {item.Status} ({item.ErrorCode})");
+        MessageBox.Show(
+            this,
+            "部分操作未完成：\n" + string.Join("\n", failures),
+            "QuickNotes",
+            MessageBoxButton.OK,
+            MessageBoxImage.Warning);
+    }
+
+    private async Task CaptureUndoAsync(ManagementUndoKind kind, IEnumerable<Guid> ids)
+    {
+        try
+        {
+            _lastUndoToken = await _services.Undo.CaptureAsync(kind, ids.ToArray());
+        }
+        catch (Exception exception)
+        {
+            _lastUndoToken = null;
+            _host.Log.TryWrite("WARN", "workspace", "undo capture failed", exception.GetType().Name);
+        }
+    }
+
+    private async void ArchiveButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_session is null || !await SaveCurrentBeforeManagementAsync())
+        {
+            return;
+        }
+
+        var noteId = _session.NoteId;
+        var version = _session.Status.BaseVersion;
+        try
+        {
+            await CaptureUndoAsync(ManagementUndoKind.Lifecycle, new[] { noteId });
+            await _services.Management.ArchiveAsync(noteId, version);
+            await RefreshAfterManagementAsync();
+        }
+        catch (Exception exception)
+        {
+            ShowError("归档失败", exception);
+        }
+    }
+
+    private async void TrashButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_session is null || !await SaveCurrentBeforeManagementAsync())
+        {
+            return;
+        }
+
+        var noteId = _session.NoteId;
+        var version = _session.Status.BaseVersion;
+        try
+        {
+            await CaptureUndoAsync(ManagementUndoKind.Lifecycle, new[] { noteId });
+            await _services.Management.MoveToTrashAsync(noteId, version);
+            await RefreshAfterManagementAsync();
+        }
+        catch (Exception exception)
+        {
+            ShowError("移入回收站失败", exception);
+        }
+    }
+
+    private async void RestoreButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_session is null || !await SaveCurrentBeforeManagementAsync())
+        {
+            return;
+        }
+
+        var noteId = _session.NoteId;
+        var version = _session.Status.BaseVersion;
+        var fromArchive = _navKind == NavKind.Archived;
+        try
+        {
+            await CaptureUndoAsync(ManagementUndoKind.Lifecycle, new[] { noteId });
+            if (fromArchive)
+            {
+                await _services.Management.UnarchiveAsync(noteId, version);
+            }
+            else
+            {
+                await _services.Management.RestoreFromTrashAsync(noteId, version);
+            }
+
+            await RefreshAfterManagementAsync();
+            _navKind = NavKind.Active;
+            _suppressSelection = true;
+            NavigationList.SelectedIndex = 0;
+            _suppressSelection = false;
+            await RefreshNotesAsync();
+            await SelectNoteAsync(noteId);
+        }
+        catch (Exception exception)
+        {
+            ShowError("恢复便签失败", exception);
+        }
+    }
+
+    private async void DeleteButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_session is null || _navKind != NavKind.Trash)
+        {
+            return;
+        }
+
+        var answer = MessageBox.Show(
+            this,
+            "永久删除后无法恢复。是否继续？",
+            "QuickNotes",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+        if (answer != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        var noteId = _session.NoteId;
+        var version = _session.Status.BaseVersion;
+        try
+        {
+            await DisposeCurrentSessionAsync();
+            await _services.Management.DeletePermanentlyAsync(noteId, version);
+            await RefreshAfterManagementAsync();
+        }
+        catch (Exception exception)
+        {
+            ShowError("永久删除失败", exception);
+        }
+    }
+
+    private async void CopyButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_session is null || !await SaveCurrentBeforeManagementAsync())
+        {
+            return;
+        }
+
+        try
+        {
+            var copy = await _services.Management.CreateCopyAsync(_session.NoteId);
+            _lastUndoToken = await _services.Undo.CaptureAsync(
+                ManagementUndoKind.Copy,
+                new[] { copy.Id });
+            await RefreshAfterManagementAsync(clearMissingSession: false);
+            await SelectNoteAsync(copy.Id);
+        }
+        catch (Exception exception)
+        {
+            ShowError("创建副本失败", exception);
+        }
+    }
+
+    private async void UndoButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_lastUndoToken is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var result = await _services.Undo.TryUndoAsync(_lastUndoToken);
+            if (result.Items.Any(item => item.Status == ManagementUndoItemStatus.NeedsConfirmation))
+            {
+                var answer = MessageBox.Show(
+                    this,
+                    "副本已被修改。撤销将把副本移入回收站，是否继续？",
+                    "QuickNotes",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning);
+                if (answer == MessageBoxResult.Yes)
+                {
+                    result = await _services.Undo.TryUndoAsync(_lastUndoToken, allowModifiedCopy: true);
+                }
+            }
+
+            if (result.AllSucceeded)
+            {
+                _lastUndoToken = null;
+            }
+            else
+            {
+                var failures = result.Items
+                    .Where(item => item.Status != ManagementUndoItemStatus.Succeeded)
+                    .Select(item => $"{item.NoteId}: {item.Status} ({item.Message})");
+                MessageBox.Show(
+                    this,
+                    "撤销未完全完成：\n" + string.Join("\n", failures),
+                    "QuickNotes",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+
+            await RefreshAfterManagementAsync();
+        }
+        catch (Exception exception)
+        {
+            ShowError("撤销失败", exception);
+        }
+    }
+
+    private async void BatchArchiveButton_Click(object sender, RoutedEventArgs e)
+    {
+        var ids = SelectedNoteIds();
+        if (ids.Length == 0 || !await SaveCurrentBeforeManagementAsync())
+        {
+            return;
+        }
+
+        try
+        {
+            await CaptureUndoAsync(ManagementUndoKind.Lifecycle, ids);
+            var result = await _services.Management.ArchiveAsync(ids);
+            ShowBatchResult(result);
+            await RefreshAfterManagementAsync();
+        }
+        catch (Exception exception)
+        {
+            ShowError("批量归档失败", exception);
+        }
+    }
+
+    private async void BatchTrashButton_Click(object sender, RoutedEventArgs e)
+    {
+        var ids = SelectedNoteIds();
+        if (ids.Length == 0 || !await SaveCurrentBeforeManagementAsync())
+        {
+            return;
+        }
+
+        try
+        {
+            await CaptureUndoAsync(ManagementUndoKind.Lifecycle, ids);
+            var result = await _services.Management.MoveToTrashAsync(ids);
+            ShowBatchResult(result);
+            await RefreshAfterManagementAsync();
+        }
+        catch (Exception exception)
+        {
+            ShowError("批量移入回收站失败", exception);
+        }
+    }
+
+    private async void BatchMoveCategoryButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (BatchCategoryCombo.SelectedItem is not Category category)
+        {
+            MessageBox.Show(this, "请选择批量目标分类。", "QuickNotes", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var ids = SelectedNoteIds();
+        if (ids.Length == 0 || !await SaveCurrentBeforeManagementAsync())
+        {
+            return;
+        }
+
+        try
+        {
+            await CaptureUndoAsync(ManagementUndoKind.Category, ids);
+            var result = await _services.Management.MoveToCategoryAsync(ids, category.Id);
+            ShowBatchResult(result);
+            await RefreshAfterManagementAsync();
+        }
+        catch (Exception exception)
+        {
+            ShowError("批量移动分类失败", exception);
+        }
+    }
+
+    private async void BatchAddTagButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (BatchTagCombo.SelectedItem is not Tag tag)
+        {
+            MessageBox.Show(this, "请选择要添加的标签。", "QuickNotes", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var ids = SelectedNoteIds();
+        if (ids.Length == 0 || !await SaveCurrentBeforeManagementAsync())
+        {
+            return;
+        }
+
+        try
+        {
+            await CaptureUndoAsync(ManagementUndoKind.Tags, ids);
+            var result = await _services.Management.AddTagsAsync(ids, new[] { tag.Id });
+            ShowBatchResult(result);
+            await RefreshAfterManagementAsync();
+        }
+        catch (Exception exception)
+        {
+            ShowError("批量添加标签失败", exception);
+        }
+    }
+
+    private async void BatchRemoveTagButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (BatchTagCombo.SelectedItem is not Tag tag)
+        {
+            MessageBox.Show(this, "请选择要移除的标签。", "QuickNotes", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var ids = SelectedNoteIds();
+        if (ids.Length == 0 || !await SaveCurrentBeforeManagementAsync())
+        {
+            return;
+        }
+
+        try
+        {
+            await CaptureUndoAsync(ManagementUndoKind.Tags, ids);
+            var result = await _services.Management.RemoveTagsAsync(ids, new[] { tag.Id });
+            ShowBatchResult(result);
+            await RefreshAfterManagementAsync();
+        }
+        catch (Exception exception)
+        {
+            ShowError("批量移除标签失败", exception);
+        }
+    }
+
+    private async void ManageCategoriesButton_Click(object sender, RoutedEventArgs e)
+    {
+        var window = new CategoryManagerWindow(_services.Catalog)
+        {
+            Owner = this
+        };
+        window.ShowDialog();
+        await RefreshAfterManagementAsync(clearMissingSession: false);
+    }
+
+    private async void ManageTagsButton_Click(object sender, RoutedEventArgs e)
+    {
+        var window = new TagManagerWindow(_services.Catalog)
+        {
+            Owner = this
+        };
+        window.ShowDialog();
+        await RefreshAfterManagementAsync(clearMissingSession: false);
+    }
+
+    private void SettingsButton_Click(object sender, RoutedEventArgs e) => OpenSettings();
+
+    public void OpenSettings()
+    {
+        var window = new SettingsWindow(_host, this)
+        {
+            Owner = this
+        };
+        window.ShowDialog();
+    }
+
+    public async Task<bool> PrepareForExitAsync()
+    {
+        if (_session is { HasPendingChanges: true })
+        {
+            await _session.FlushDraftAsync();
+            var result = await _session.SaveNowAsync();
+            if (result.Status != SaveStatus.Saved || _session.HasPendingChanges)
+            {
+                return false;
+            }
+        }
+
+        _allowClose = true;
+        Close();
+        return true;
+    }
+
+    public async Task CreateNewFromTrayAsync()
+    {
+        Show();
+        if (WindowState == WindowState.Minimized)
+        {
+            WindowState = WindowState.Normal;
+        }
+
+        Activate();
+        await StartNewAsync();
     }
 
     private async void NewButton_Click(object sender, RoutedEventArgs e) => await StartNewAsync();
@@ -406,6 +1339,44 @@ public partial class WorkspaceWindow : Window
         }
     }
 
+    private void NotesList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (_noteWindows is null
+            || NotesList.SelectedItems.Count != 1
+            || NotesList.SelectedItem is not NoteListItem item)
+        {
+            return;
+        }
+
+        _ = _noteWindows.ActivateNoteAsync(item.Id);
+    }
+
+    private async void ToggleDisplayButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_session is null || !await SaveCurrentBeforeManagementAsync())
+        {
+            return;
+        }
+
+        try
+        {
+            var target = _session.DisplayIntent == NoteDisplayIntent.Visible
+                ? NoteDisplayIntent.Hidden
+                : NoteDisplayIntent.Visible;
+            _session.ChangeDisplayIntent(target);
+            await _session.SaveNowAsync();
+            UpdateStatus();
+            if (_noteWindows is not null)
+            {
+                await _noteWindows.RefreshAsync();
+            }
+        }
+        catch (Exception exception)
+        {
+            ShowError("更新便签显示状态失败", exception);
+        }
+    }
+
     private async Task UpdateBackupStatusAsync()
     {
         if (_host.BackupServices is null)
@@ -463,7 +1434,8 @@ public partial class WorkspaceWindow : Window
                     return;
                 }
 
-                await BindSessionAsync(restored);
+                var adopted = await _services.Sessions.AdoptAsync(restored);
+                await BindSessionAsync(adopted);
                 await RefreshNotesAsync();
                 SelectSessionItem();
                 UpdateStatus();
@@ -515,11 +1487,12 @@ public partial class WorkspaceWindow : Window
         try
         {
             var newSession = await _session.SaveAsNewAsync();
-            await BindSessionAsync(newSession);
+            var adopted = await _services.Sessions.AdoptAsync(newSession);
+            await BindSessionAsync(adopted);
             await RefreshNotesAsync();
             SelectSessionItem();
             UpdateStatus();
-            if (newSession.Status.SaveState != EditorSaveState.Saved)
+            if (adopted.Status.SaveState != EditorSaveState.Saved)
             {
                 MessageBox.Show(
                     this,
@@ -582,6 +1555,17 @@ public partial class WorkspaceWindow : Window
             return false;
         }
 
+        if (_noteWindows is not null && !await _noteWindows.PrepareForRestoreAsync())
+        {
+            MessageBox.Show(
+                this,
+                "桌面便签未能保存，恢复已取消。请先处理保存失败或冲突。",
+                "QuickNotes",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return false;
+        }
+
         if (_session is null)
         {
             return true;
@@ -635,15 +1619,17 @@ public partial class WorkspaceWindow : Window
         {
             try
             {
-                var reopened = await _services.Workspace.OpenAsync(noteId);
-                if (reopened is not null)
-                {
-                    await BindSessionAsync(reopened);
-                }
-                else
-                {
-                    await BindSessionAsync(await _services.Workspace.CreateNewAsync());
-                }
+                var invalidated = _session;
+                _session = null;
+                invalidated.StatusChanged -= Session_StatusChanged;
+                await _services.Sessions.ReleaseAsync(noteId);
+                var reopened = await _services.Sessions.GetOrOpenAsync(noteId);
+                await BindSessionAsync(reopened);
+            }
+            catch (NoteNotFoundException)
+            {
+                var newSession = await _services.Sessions.CreateNewAsync();
+                await BindSessionAsync(newSession);
             }
             catch (Exception exception)
             {
@@ -665,6 +1651,12 @@ public partial class WorkspaceWindow : Window
     {
         TitleBox.IsReadOnly = readOnly;
         BodyBox.IsReadOnly = readOnly;
+        CategoryEditorCombo.IsEnabled = !readOnly;
+        TagsEditorList.IsEnabled = !readOnly;
+        PinCheckBox.IsEnabled = !readOnly;
+        ColorModeCombo.IsEnabled = !readOnly;
+        ColorHexBox.IsEnabled = !readOnly;
+        FontSizeBox.IsEnabled = !readOnly;
         NewButton.IsEnabled = !readOnly;
         SaveButton.IsEnabled = !readOnly;
         RefreshButton.IsEnabled = !readOnly;
@@ -676,13 +1668,6 @@ public partial class WorkspaceWindow : Window
     {
         if (_allowClose)
         {
-            base.OnClosing(e);
-            return;
-        }
-
-        if (_session is null || !_session.HasPendingChanges)
-        {
-            _allowClose = true;
             base.OnClosing(e);
             return;
         }
@@ -701,39 +1686,60 @@ public partial class WorkspaceWindow : Window
     {
         try
         {
-            await _session!.FlushDraftAsync();
-            SaveResult? result = null;
-            try
+            var choiceWindow = new CloseChoiceWindow
             {
-                result = await _session.SaveNowAsync();
-            }
-            catch (Exception exception)
+                Owner = this
+            };
+            var selected = choiceWindow.ShowDialog() == true
+                ? choiceWindow.Choice
+                : CloseChoice.Cancel;
+            if (selected == CloseChoice.Cancel)
             {
-                _host.Log.TryWrite("ERROR", "workspace", "close save failed", exception.GetType().Name);
-            }
-
-            if (result?.Status == SaveStatus.Saved && !_session.HasPendingChanges)
-            {
-                _allowClose = true;
-                Close();
                 return;
             }
 
-            var answer = MessageBox.Show(
-                this,
-                "当前便签未能保存。草稿已保留；是否保留草稿并退出？",
-                "QuickNotes",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Warning);
-            if (answer == MessageBoxResult.Yes)
+            if (_session is not null)
             {
-                _allowClose = true;
+                await _session.FlushDraftAsync();
+            }
+
+            if (_session is { HasPendingChanges: true })
+            {
+                var result = await _session.SaveNowAsync();
+                if (result.Status != SaveStatus.Saved || _session.HasPendingChanges)
+                {
+                    var answer = MessageBox.Show(
+                        this,
+                        "当前便签未能保存。草稿已保留；是否继续关闭？",
+                        "QuickNotes",
+                        MessageBoxButton.YesNo,
+                        MessageBoxImage.Warning);
+                    if (answer != MessageBoxResult.Yes)
+                    {
+                        return;
+                    }
+                }
+            }
+
+            if (selected == CloseChoice.MinimizeToTray)
+            {
+                Hide();
+                return;
+            }
+
+            _allowClose = true;
+            if (_exitApplication is not null)
+            {
+                await _exitApplication();
+            }
+            else
+            {
                 Close();
             }
         }
         catch (Exception exception)
         {
-            ShowError("退出前保存失败", exception);
+            ShowError("关闭前保存失败", exception);
         }
         finally
         {
@@ -744,12 +1750,17 @@ public partial class WorkspaceWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
-        try
+        if (_session is { } session)
         {
-            _session?.DisposeAsync().AsTask().GetAwaiter().GetResult();
-        }
-        catch
-        {
+            session.StatusChanged -= Session_StatusChanged;
+            _session = null;
+            try
+            {
+                _services.Sessions.ReleaseAsync(session.NoteId).GetAwaiter().GetResult();
+            }
+            catch
+            {
+            }
         }
 
         base.OnClosed(e);
@@ -780,4 +1791,17 @@ public partial class WorkspaceWindow : Window
 }
 
 public sealed record NoteListItem(Guid Id, string TitleDisplay, string PreviewDisplay, string ModifiedDisplay);
+
+public enum NavKind
+{
+    Active,
+    Archived,
+    Trash
+}
+
+public sealed record NavItem(string Display, NavKind Kind);
+
+public sealed record CategoryFilterItem(Guid? Id, string Name);
+
+public sealed record ColorModeItem(NoteColorMode Mode, string Display);
 
