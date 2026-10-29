@@ -1,9 +1,11 @@
 using QuickNotes.Application;
+using QuickNotes.Desktop.Backup;
 using QuickNotes.Desktop.Diagnostics;
 using QuickNotes.Desktop.Editing;
 using QuickNotes.Desktop.Migration;
 using QuickNotes.Desktop.Paths;
 using QuickNotes.Desktop.Recovery;
+using QuickNotes.Desktop.Settings;
 using QuickNotes.Desktop.SingleInstance;
 using QuickNotes.Desktop.Startup;
 using QuickNotes.Desktop.State;
@@ -26,6 +28,8 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
     private MissingDatabaseRebuilder? _rebuilder;
     private PersistentDatabaseWriteGate? _writeGate;
     private DesktopEditingServices? _editingServices;
+    private IDeviceSettingsStore? _deviceSettings;
+    private DesktopBackupServices? _backupServices;
     private bool _disposed;
 
     public DesktopApplicationHost(
@@ -47,6 +51,8 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
     public IDatabaseWriteGate? WriteGate => _writeGate;
 
     public DesktopEditingServices? EditingServices => _editingServices;
+
+    public DesktopBackupServices? BackupServices => _backupServices;
 
     public event Action? ActivationRequested;
 
@@ -98,6 +104,7 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
 
         _stateStore = new ApplicationStateStore(_paths.StatePath);
         _journalStore = new FileRestoreJournalStore(_paths.RestoreJournalPath);
+        _deviceSettings = new FileDeviceSettingsStore(_paths.DeviceSettingsPath);
         var restoreStore = new SqliteRestoreStore();
         var schemaMigrator = new SqliteSchemaMigrator();
         var migrationService = new SchemaMigrationService(
@@ -134,6 +141,7 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
             timeProvider: _timeProvider,
             initiallyBlocked: Assessment.State?.WritesBlocked == true);
         RefreshEditingServices();
+        await RefreshBackupServicesAsync(cancellationToken).ConfigureAwait(false);
 
         return new DesktopStartResult
         {
@@ -153,6 +161,7 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
             .ConfigureAwait(false);
         UpdateWriteGate();
         RefreshEditingServices();
+        await RefreshBackupServicesAsync(cancellationToken).ConfigureAwait(false);
         return Assessment;
     }
 
@@ -165,6 +174,7 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
             .ConfigureAwait(false);
         UpdateWriteGate();
         RefreshEditingServices();
+        await RefreshBackupServicesAsync(cancellationToken).ConfigureAwait(false);
         return Assessment;
     }
 
@@ -189,6 +199,7 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
                 .ConfigureAwait(false);
             UpdateWriteGate();
             RefreshEditingServices();
+            await RefreshBackupServicesAsync(cancellationToken).ConfigureAwait(false);
         }
 
         return result;
@@ -202,6 +213,12 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
         }
 
         _disposed = true;
+        if (_backupServices is not null)
+        {
+            await _backupServices.Host.DisposeAsync().ConfigureAwait(false);
+            _backupServices = null;
+        }
+
         if (_guard is not null)
         {
             await _guard.DisposeAsync().ConfigureAwait(false);
@@ -257,12 +274,62 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
             saves,
             drafts,
             timeProvider: _timeProvider);
-        var recovery = new DraftRecoveryService(_paths, notes, drafts, workspace);
+        var boundaryStore = new DraftRestoreBoundaryStore(_paths.DraftRestoreBoundaryPath);
+        var recovery = new DraftRecoveryService(
+            _paths,
+            notes,
+            drafts,
+            workspace,
+            boundaryStore);
         _editingServices = new DesktopEditingServices(
             notes,
             drafts,
             saves,
             workspace,
             recovery);
+    }
+
+    private async Task RefreshBackupServicesAsync(CancellationToken cancellationToken)
+    {
+        if (_backupServices is not null)
+        {
+            await _backupServices.Host.DisposeAsync().ConfigureAwait(false);
+            _backupServices = null;
+        }
+
+        if (Assessment?.CanEnterNormalUse != true
+            || _paths is null
+            || _deviceSettings is null
+            || _log is null)
+        {
+            return;
+        }
+
+        var verifier = new BackupPackageVerifier();
+        var backups = new BackupCoordinator(
+            new SqliteSnapshotProvider(_paths.DatabasePath),
+            new ZipBackupPackageStore(),
+            _timeProvider);
+        var catalog = new FileBackupCatalog(verifier);
+        var daily = new DailyBackupService(
+            new SqliteChangeDetector(_paths.DatabasePath),
+            catalog,
+            backups,
+            new BackupRetentionPolicy(),
+            new FileBackupRetentionStore(),
+            new FileBackupStateStore(),
+            _timeProvider);
+        var host = new BackupHostService(
+            _paths,
+            _deviceSettings,
+            new FileBackupRuntimeStatusStore(_paths.BackupRuntimeStatusPath),
+            daily,
+            backups,
+            catalog,
+            verifier,
+            timeProvider: _timeProvider,
+            log: _log);
+        _backupServices = new DesktopBackupServices(host, catalog, verifier, _deviceSettings);
+        await host.StartAsync(cancellationToken).ConfigureAwait(false);
     }
 }
