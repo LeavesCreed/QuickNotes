@@ -9,17 +9,20 @@ public sealed class DraftRecoveryService
     private readonly INoteRepository _notes;
     private readonly INoteDraftStore _drafts;
     private readonly EditorWorkspaceService _workspace;
+    private readonly DraftRestoreBoundaryStore? _boundaryStore;
 
     public DraftRecoveryService(
         DesktopPaths paths,
         INoteRepository notes,
         INoteDraftStore drafts,
-        EditorWorkspaceService workspace)
+        EditorWorkspaceService workspace,
+        DraftRestoreBoundaryStore? boundaryStore = null)
     {
         _paths = paths ?? throw new ArgumentNullException(nameof(paths));
         _notes = notes ?? throw new ArgumentNullException(nameof(notes));
         _drafts = drafts ?? throw new ArgumentNullException(nameof(drafts));
         _workspace = workspace ?? throw new ArgumentNullException(nameof(workspace));
+        _boundaryStore = boundaryStore;
     }
 
     public async Task<DraftRecoveryInventory> ListAsync(
@@ -27,6 +30,10 @@ public sealed class DraftRecoveryService
     {
         var items = new List<DraftRecoveryItem>();
         var issues = new List<DraftRecoveryIssue>();
+        var boundary = _boundaryStore is null
+            ? null
+            : await _boundaryStore.ReadAsync(cancellationToken).ConfigureAwait(false);
+        var preRestoreDraftIds = boundary?.DraftIds.ToHashSet() ?? new HashSet<Guid>();
         if (!Directory.Exists(_paths.DraftDirectory))
         {
             return new DraftRecoveryInventory(items, issues);
@@ -101,7 +108,10 @@ public sealed class DraftRecoveryService
 
             var exists = await _notes.GetAsync(draft.NoteId, cancellationToken).ConfigureAwait(false)
                 is not null;
-            items.Add(new DraftRecoveryItem(draft, exists));
+            items.Add(new DraftRecoveryItem(
+                draft,
+                exists,
+                preRestoreDraftIds.Contains(draft.DraftId)));
         }
 
         return new DraftRecoveryInventory(

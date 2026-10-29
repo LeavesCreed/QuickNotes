@@ -9,4 +9,9 @@ public interface IRestoreCoordinator
     Task<RestoreResult> RestoreAsync(
         RestoreRequest request,
         CancellationToken cancellationToken = default);
+
+    Task<RestoreResult> RestoreAsync(
+        RestoreRequest request,
+        IProgress<RestoreProgress>? progress,
+        CancellationToken cancellationToken = default);
 }

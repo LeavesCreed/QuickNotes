@@ -5,6 +5,9 @@ public sealed record DesktopPaths
     public const string DatabaseFileName = "notes.db";
     public const string StateFileName = "application-state.json";
     public const string RestoreJournalFileName = "recovery-journal.json";
+    public const string DeviceSettingsFileName = "device-settings.json";
+    public const string BackupRuntimeStatusFileName = "backup-status.json";
+    public const string DraftRestoreBoundaryFileName = "draft-restore-boundary.json";
 
     public required string DataRoot { get; init; }
 
@@ -13,7 +16,9 @@ public sealed record DesktopPaths
     public string LogDirectory => Path.Combine(DataRoot, "logs");
     public string StatePath => Path.Combine(DataRoot, StateFileName);
     public string RestoreJournalPath => Path.Combine(DataRoot, RestoreJournalFileName);
-    public string DeviceSettingsPath => Path.Combine(DataRoot, "device-settings.json");
+    public string DeviceSettingsPath => Path.Combine(DataRoot, DeviceSettingsFileName);
+    public string BackupRuntimeStatusPath => Path.Combine(DataRoot, BackupRuntimeStatusFileName);
+    public string DraftRestoreBoundaryPath => Path.Combine(DataRoot, DraftRestoreBoundaryFileName);
     public string MigrationProtectionDirectory => Path.Combine(DataRoot, "migration-protection");
 
     public static DesktopPaths CreateDefault() =>

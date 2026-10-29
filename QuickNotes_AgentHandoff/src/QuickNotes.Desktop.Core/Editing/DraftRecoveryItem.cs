@@ -4,7 +4,8 @@ namespace QuickNotes.Desktop.Editing;
 
 public sealed record DraftRecoveryItem(
     NoteDraft Draft,
-    bool NoteExists);
+    bool NoteExists,
+    bool IsPreRestore = false);
 
 public sealed record DraftRecoveryIssue(
     string FileName,

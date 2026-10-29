@@ -405,12 +405,28 @@ public sealed class RestoreCoordinator : IRestoreCoordinator
         RestoreRequest request,
         CancellationToken cancellationToken = default)
     {
+        return await RestoreAsync(request, progress: null, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<RestoreResult> RestoreAsync(
+        RestoreRequest request,
+        IProgress<RestoreProgress>? progress,
+        CancellationToken cancellationToken = default)
+    {
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
+        progress?.Report(new RestoreProgress(
+            RestoreProgressStage.Preflight,
+            "Checking the backup before restore.",
+            IsCancelable: true));
         var startedAt = Stopwatch.GetTimestamp();
         var preflight = await PreflightAsync(request, cancellationToken).ConfigureAwait(false);
         if (!preflight.CanProceed)
         {
+            progress?.Report(new RestoreProgress(
+                RestoreProgressStage.Failed,
+                "Restore preflight failed.",
+                IsCancelable: false));
             return new RestoreResult
             {
                 Status = RestoreStatus.PreflightFailed,
