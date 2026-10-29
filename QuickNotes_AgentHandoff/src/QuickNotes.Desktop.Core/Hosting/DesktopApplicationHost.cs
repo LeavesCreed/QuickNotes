@@ -265,6 +265,7 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
 
         var factory = new SqliteConnectionFactory(_paths.DatabasePath);
         var notes = new SqliteNoteRepository(factory);
+        var catalog = new SqliteCatalogRepository(factory);
         var drafts = new FileNoteDraftStore(_paths.DraftDirectory);
         var saves = new NoteSaveCoordinator(
             notes,
@@ -283,12 +284,21 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
             drafts,
             workspace,
             boundaryStore);
+        var management = new NoteManagementService(
+            notes,
+            catalog,
+            _writeGate,
+            _timeProvider);
+        var undo = new ManagementUndoService(notes, _writeGate, _timeProvider);
         _editingServices = new DesktopEditingServices(
             notes,
             drafts,
             saves,
             workspace,
-            recovery);
+            recovery,
+            catalog,
+            management,
+            undo);
     }
 
     private async Task RefreshBackupServicesAsync(CancellationToken cancellationToken)

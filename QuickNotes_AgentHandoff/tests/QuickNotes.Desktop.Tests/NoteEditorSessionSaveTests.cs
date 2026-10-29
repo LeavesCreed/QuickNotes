@@ -7,6 +7,37 @@ namespace QuickNotes.Desktop.Tests;
 public sealed class NoteEditorSessionSaveTests
 {
     [Fact]
+    public async Task ChangeCategoryTagsAndPin_MarkDirtyAndPersistDraft()
+    {
+        var (workspace, notes, saves, drafts) = CreateWorkspace();
+        var note = EditorTestData.NewNote(version: 1);
+        var categoryId = Guid.NewGuid();
+        var tagId = Guid.NewGuid();
+        notes.Add(note);
+        saves.UpdateHandler = (saving, expectedVersion, tagIds, draftId, _) =>
+        {
+            var updated = saving with { Version = expectedVersion + 1 };
+            notes.Add(updated, tagIds);
+            return Task.FromResult(FakeSaveCoordinator.SavedResult(updated, draftId));
+        };
+        var session = (await workspace.OpenAsync(note.Id))!;
+
+        session.ChangeCategory(categoryId);
+        session.ChangeTags(new[] { tagId });
+        session.ChangePin(true);
+        await session.FlushDraftAsync();
+        await session.SaveNowAsync();
+
+        Assert.Equal(categoryId, session.CategoryId);
+        Assert.Equal(new[] { tagId }, session.TagIds);
+        Assert.True(session.IsPinned);
+        Assert.Equal(categoryId, drafts.Drafts[session.DraftId].CategoryId);
+        Assert.Equal(new[] { tagId }, drafts.Drafts[session.DraftId].TagIds);
+        Assert.True(drafts.Drafts[session.DraftId].IsPinned);
+        Assert.True(notes.Notes[note.Id].IsPinned);
+    }
+
+    [Fact]
     public async Task ChangeAppearanceAndLayout_SaveRoundTrips()
     {
         var (workspace, notes, saves, _) = CreateWorkspace();
