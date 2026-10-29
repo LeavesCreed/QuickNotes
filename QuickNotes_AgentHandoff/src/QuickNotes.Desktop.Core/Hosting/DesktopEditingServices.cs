@@ -11,4 +11,5 @@ public sealed record DesktopEditingServices(
     DraftRecoveryService DraftRecovery,
     ICatalogRepository Catalog,
     NoteManagementService Management,
-    ManagementUndoService Undo);
+    ManagementUndoService Undo,
+    IApplicationSettingsRepository Settings);

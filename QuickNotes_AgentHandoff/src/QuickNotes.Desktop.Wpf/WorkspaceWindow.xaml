@@ -26,7 +26,8 @@
             <Button x:Name="SaveButton" Content="保存" Padding="14,6" Margin="0,0,8,0" Click="SaveButton_Click" />
             <Button x:Name="RefreshButton" Content="刷新" Padding="14,6" Margin="0,0,8,0" Click="RefreshButton_Click" />
             <Button x:Name="DraftsButton" Content="草稿恢复" Padding="14,6" Margin="0,0,8,0" Click="DraftsButton_Click" />
-            <Button x:Name="BackupButton" Content="备份与恢复" Padding="14,6" Click="BackupButton_Click" />
+            <Button x:Name="BackupButton" Content="备份与恢复" Padding="14,6" Margin="0,0,8,0" Click="BackupButton_Click" />
+            <Button x:Name="SettingsButton" Content="设置" Padding="14,6" Click="SettingsButton_Click" />
             <TextBlock x:Name="BackupStatusText"
                        Margin="16,0,0,0"
                        VerticalAlignment="Center"
@@ -140,6 +141,7 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
@@ -180,9 +182,30 @@
                             Click="CopyButton_Click" />
                 </Grid>
 
-                <TextBlock Grid.Row="3" Text="标签（Ctrl 多选）" Foreground="#555555" />
+                <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,0,0,8">
+                    <TextBlock Text="颜色：" VerticalAlignment="Center" />
+                    <ComboBox x:Name="ColorModeCombo"
+                              Width="110"
+                              Margin="4,0,8,0"
+                              DisplayMemberPath="Display"
+                              SelectionChanged="ColorModeCombo_SelectionChanged" />
+                    <TextBox x:Name="ColorHexBox"
+                             Width="90"
+                             Padding="5"
+                             Margin="0,0,12,0"
+                             LostKeyboardFocus="AppearanceBox_LostKeyboardFocus" />
+                    <TextBlock Text="字号：" VerticalAlignment="Center" />
+                    <TextBox x:Name="FontSizeBox"
+                             Width="55"
+                             Padding="5"
+                             Margin="4,0,4,0"
+                             LostKeyboardFocus="AppearanceBox_LostKeyboardFocus" />
+                    <TextBlock Text="（空=跟随全局）" Foreground="#777777" VerticalAlignment="Center" />
+                </StackPanel>
+
+                <TextBlock Grid.Row="4" Text="标签（Ctrl 多选）" Foreground="#555555" />
                 <ListBox x:Name="TagsEditorList"
-                         Grid.Row="4"
+                         Grid.Row="5"
                          Height="76"
                          Margin="0,4,0,8"
                          SelectionMode="Multiple"
@@ -195,7 +218,7 @@
                 </ListBox>
 
                 <TextBox x:Name="BodyBox"
-                         Grid.Row="5"
+                         Grid.Row="6"
                          Margin="0,0,0,8"
                          Padding="6"
                          AcceptsReturn="True"
@@ -204,7 +227,7 @@
                          TextChanged="EditorTextChanged"
                          LostKeyboardFocus="EditorLostKeyboardFocus" />
 
-                <StackPanel Grid.Row="6">
+                <StackPanel Grid.Row="7">
                     <Border x:Name="ConflictPanel"
                             Visibility="Collapsed"
                             BorderBrush="#D9534F"
@@ -243,7 +266,7 @@
                     </StackPanel>
                 </StackPanel>
 
-                <StackPanel Grid.Row="7" Orientation="Horizontal" Margin="0,8,0,0">
+                <StackPanel Grid.Row="8" Orientation="Horizontal" Margin="0,8,0,0">
                     <Button x:Name="ArchiveButton" Content="归档" Padding="10,4" Margin="0,0,6,0" Click="ArchiveButton_Click" />
                     <Button x:Name="TrashButton" Content="移入回收站" Padding="10,4" Margin="0,0,6,0" Click="TrashButton_Click" />
                     <Button x:Name="RestoreButton" Content="恢复" Padding="10,4" Margin="0,0,6,0" Click="RestoreButton_Click" />
@@ -251,8 +274,7 @@
                     <Button x:Name="UndoButton" Content="撤销上一管理操作" Padding="10,4" Click="UndoButton_Click" />
                 </StackPanel>
 
-                <StackPanel Grid.Row="8" Orientation="Horizontal" Margin="0,8,0,0">
-                    <TextBlock Text="批量：" VerticalAlignment="Center" />
+                <StackPanel Grid.Row="9" Orientation="Horizontal" Margin="0,8,0,0">
                     <Button x:Name="BatchArchiveButton" Content="归档" Padding="10,4" Margin="4,0,6,0" Click="BatchArchiveButton_Click" />
                     <Button x:Name="BatchTrashButton" Content="移入回收站" Padding="10,4" Margin="0,0,6,0" Click="BatchTrashButton_Click" />
                     <Button x:Name="BatchMoveCategoryButton" Content="移动到分类" Padding="10,4" Margin="0,0,6,0" Click="BatchMoveCategoryButton_Click" />

@@ -94,6 +94,11 @@ public partial class WorkspaceWindow : Window
             : filterItems.FirstOrDefault(item => item.Id == _categoryFilterId) ?? filterItems[0];
         CategoryEditorCombo.ItemsSource = categories;
         BatchCategoryCombo.ItemsSource = categories;
+        ColorModeCombo.ItemsSource = new[]
+        {
+            new ColorModeItem(NoteColorMode.FollowCategory, "跟随分类"),
+            new ColorModeItem(NoteColorMode.Manual, "手动颜色")
+        };
         TagFilterList.ItemsSource = tags;
         TagsEditorList.ItemsSource = tags;
         BatchTagCombo.ItemsSource = tags;
@@ -123,6 +128,13 @@ public partial class WorkspaceWindow : Window
         }
 
         PinCheckBox.IsChecked = _session.IsPinned;
+        var colorMode = ColorModeCombo.Items
+            .OfType<ColorModeItem>()
+            .FirstOrDefault(item => item.Mode == _session.ColorMode);
+        ColorModeCombo.SelectedItem = colorMode;
+        ColorHexBox.Text = _session.ColorHex ?? string.Empty;
+        ColorHexBox.IsEnabled = _session.ColorMode == NoteColorMode.Manual;
+        FontSizeBox.Text = _session.FontSize?.ToString() ?? string.Empty;
         _loadingEditor = false;
     }
 
@@ -274,6 +286,12 @@ public partial class WorkspaceWindow : Window
         CategoryEditorCombo.SelectedItem = _categories
             .FirstOrDefault(category => category.Id == session.CategoryId);
         PinCheckBox.IsChecked = session.IsPinned;
+        ColorModeCombo.SelectedItem = ColorModeCombo.Items
+            .OfType<ColorModeItem>()
+            .FirstOrDefault(item => item.Mode == session.ColorMode);
+        ColorHexBox.Text = session.ColorHex ?? string.Empty;
+        ColorHexBox.IsEnabled = session.ColorMode == NoteColorMode.Manual;
+        FontSizeBox.Text = session.FontSize?.ToString() ?? string.Empty;
         TagsEditorList.SelectedItems.Clear();
         foreach (var tagId in session.TagIds)
         {
@@ -585,6 +603,58 @@ public partial class WorkspaceWindow : Window
 
         _session.ChangePin(PinCheckBox.IsChecked == true);
         UpdateStatus();
+    }
+
+    private void ColorModeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingEditor || _session is null || ColorModeCombo.SelectedItem is not ColorModeItem item)
+        {
+            return;
+        }
+
+        ColorHexBox.IsEnabled = item.Mode == NoteColorMode.Manual;
+        ApplyAppearance();
+    }
+
+    private void AppearanceBox_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e) =>
+        ApplyAppearance();
+
+    private void ApplyAppearance()
+    {
+        if (_loadingEditor || _session is null || ColorModeCombo.SelectedItem is not ColorModeItem item)
+        {
+            return;
+        }
+
+        int? fontSize = null;
+        if (!string.IsNullOrWhiteSpace(FontSizeBox.Text))
+        {
+            if (!int.TryParse(FontSizeBox.Text.Trim(), out var parsed))
+            {
+                MessageBox.Show(this, "字号必须是数字。", "QuickNotes", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            fontSize = parsed;
+        }
+
+        var colorHex = item.Mode == NoteColorMode.Manual
+            ? ColorHexBox.Text.Trim()
+            : null;
+        try
+        {
+            _session.ChangeAppearance(item.Mode, colorHex, fontSize);
+            UpdateStatus();
+        }
+        catch (ArgumentException exception)
+        {
+            MessageBox.Show(
+                this,
+                exception.Message,
+                "QuickNotes",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
     }
 
     private async Task SelectFirstAndOpenAsync()
@@ -1009,6 +1079,15 @@ public partial class WorkspaceWindow : Window
         await RefreshAfterManagementAsync(clearMissingSession: false);
     }
 
+    private void SettingsButton_Click(object sender, RoutedEventArgs e)
+    {
+        var window = new SettingsWindow(_host, this)
+        {
+            Owner = this
+        };
+        window.ShowDialog();
+    }
+
     private async void NewButton_Click(object sender, RoutedEventArgs e) => await StartNewAsync();
 
     private async void SaveButton_Click(object sender, RoutedEventArgs e) => await SaveAsync();
@@ -1361,6 +1440,9 @@ public partial class WorkspaceWindow : Window
         CategoryEditorCombo.IsEnabled = !readOnly;
         TagsEditorList.IsEnabled = !readOnly;
         PinCheckBox.IsEnabled = !readOnly;
+        ColorModeCombo.IsEnabled = !readOnly;
+        ColorHexBox.IsEnabled = !readOnly;
+        FontSizeBox.IsEnabled = !readOnly;
         NewButton.IsEnabled = !readOnly;
         SaveButton.IsEnabled = !readOnly;
         RefreshButton.IsEnabled = !readOnly;
@@ -1487,4 +1569,6 @@ public enum NavKind
 public sealed record NavItem(string Display, NavKind Kind);
 
 public sealed record CategoryFilterItem(Guid? Id, string Name);
+
+public sealed record ColorModeItem(NoteColorMode Mode, string Display);
 

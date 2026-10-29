@@ -1,0 +1,59 @@
+<Window x:Class="QuickNotes.Desktop.Wpf.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="QuickNotes 设置"
+        Width="560"
+        Height="470"
+        WindowStartupLocation="CenterOwner">
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Text="常规" FontWeight="SemiBold" />
+        <Grid Grid.Row="1" Margin="0,8,0,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="140" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <TextBlock Text="默认字号：" VerticalAlignment="Center" />
+            <TextBox x:Name="DefaultFontSizeBox" Grid.Column="1" Width="80" HorizontalAlignment="Left" Padding="5" />
+            <CheckBox x:Name="NotificationsCheckBox" Grid.Row="1" Grid.Column="1" Content="启用系统通知" Margin="0,8,0,0" />
+            <CheckBox x:Name="GlobalHiddenCheckBox" Grid.Row="2" Grid.Column="1" Content="全局隐藏桌面便签（不改变单张隐藏状态）" Margin="0,8,0,0" />
+        </Grid>
+
+        <TextBlock Grid.Row="2" Text="顶栏动作（全局统一）" FontWeight="SemiBold" />
+        <WrapPanel Grid.Row="3" Margin="0,8,0,10">
+            <CheckBox x:Name="TopBarPinCheckBox" Content="置顶" Margin="0,0,14,0" />
+            <CheckBox x:Name="TopBarCategoryCheckBox" Content="分类" Margin="0,0,14,0" />
+            <CheckBox x:Name="TopBarColorCheckBox" Content="颜色" Margin="0,0,14,0" />
+            <CheckBox x:Name="TopBarFontSizeCheckBox" Content="字号" Margin="0,0,14,0" />
+            <CheckBox x:Name="TopBarMoreCheckBox" Content="更多" />
+        </WrapPanel>
+
+        <StackPanel Grid.Row="4">
+            <TextBlock Text="备份" FontWeight="SemiBold" />
+            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                <TextBlock Text="备份目录：" VerticalAlignment="Center" />
+                <TextBlock x:Name="BackupDirectoryText" Margin="6,0,12,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                <Button Content="备份设置" Padding="10,4" Click="BackupSettingsButton_Click" />
+            </StackPanel>
+        </StackPanel>
+
+        <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right">
+            <TextBlock x:Name="ErrorText" Foreground="#A94442" Margin="0,0,12,0" VerticalAlignment="Center" />
+            <Button Content="保存" Padding="12,6" Margin="0,0,8,0" Click="SaveButton_Click" />
+            <Button Content="关闭" Padding="12,6" Click="CloseButton_Click" />
+        </StackPanel>
+    </Grid>
+</Window>
