@@ -7,6 +7,10 @@ public sealed record RestorePreflightResult
     public RestoreCounts? BackupCounts { get; init; }
     public RestoreCounts? CurrentCounts { get; init; }
     public int PendingDraftCount { get; init; }
+    public bool RequiresMigration { get; init; }
+    public long TargetSchemaVersion { get; init; }
+    public string? SourceManifestSha256 { get; init; }
+    public string? TargetDatabaseSha256 { get; init; }
     public long RequiredBytes { get; init; }
     public long AvailableBytes { get; init; }
     public RestoreError? Error { get; init; }

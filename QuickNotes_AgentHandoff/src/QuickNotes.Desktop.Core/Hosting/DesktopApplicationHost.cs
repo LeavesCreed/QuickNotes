@@ -99,9 +99,10 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
         _stateStore = new ApplicationStateStore(_paths.StatePath);
         _journalStore = new FileRestoreJournalStore(_paths.RestoreJournalPath);
         var restoreStore = new SqliteRestoreStore();
+        var schemaMigrator = new SqliteSchemaMigrator();
         var migrationService = new SchemaMigrationService(
             _paths,
-            new SqliteSchemaMigrator(),
+            schemaMigrator,
             restoreStore,
             _log,
             _timeProvider);
@@ -123,6 +124,7 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
             _paths,
             new BackupPackageVerifier(),
             restoreStore,
+            schemaMigrator,
             _stateStore,
             _log,
             _timeProvider);

@@ -153,7 +153,8 @@ public sealed class FaultInjectionRestoreTests
                 new ZipBackupPackageStore()),
             draftStore,
             new DriveInfoDiskSpaceProvider(),
-            gate);
+            gate,
+            new SqliteSchemaMigrator());
 
     private static RestoreRequest CreateRequest(
         string packagePath,

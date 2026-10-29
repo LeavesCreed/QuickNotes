@@ -14,26 +14,49 @@ public sealed class RestoreCoordinatorTests
         var drafts = new FakeRestoreDraftStore();
         var disk = new FakeDiskSpaceProvider();
         var gate = new DatabaseWriteGate();
+        var migrator = new FakeSchemaMigrator();
 
         Assert.Throws<ArgumentNullException>(() => new RestoreCoordinator(
-            null!, store, backups, drafts, disk, gate));
+            null!, store, backups, drafts, disk, gate, migrator));
         Assert.Throws<ArgumentNullException>(() => new RestoreCoordinator(
-            extractor, null!, backups, drafts, disk, gate));
+            extractor, null!, backups, drafts, disk, gate, migrator));
         Assert.Throws<ArgumentNullException>(() => new RestoreCoordinator(
-            extractor, store, null!, drafts, disk, gate));
+            extractor, store, null!, drafts, disk, gate, migrator));
         Assert.Throws<ArgumentNullException>(() => new RestoreCoordinator(
-            extractor, store, backups, null!, disk, gate));
+            extractor, store, backups, null!, disk, gate, migrator));
         Assert.Throws<ArgumentNullException>(() => new RestoreCoordinator(
-            extractor, store, backups, drafts, null!, gate));
+            extractor, store, backups, drafts, null!, gate, migrator));
         Assert.Throws<ArgumentNullException>(() => new RestoreCoordinator(
-            extractor, store, backups, drafts, disk, null!));
+            extractor, store, backups, drafts, disk, null!, migrator));
+        Assert.Throws<ArgumentNullException>(() => new RestoreCoordinator(
+            extractor, store, backups, drafts, disk, gate, null!));
         Assert.Throws<ArgumentException>(() => new RestoreCoordinator(
             extractor,
             store,
             backups,
             drafts,
             disk,
-            NoopDatabaseWriteGate.Instance));
+            NoopDatabaseWriteGate.Instance,
+            migrator));
+    }
+
+    [Fact]
+    public async Task Preflight_MigrationFailure_ReturnsPackageInvalidWithoutSwitching()
+    {
+        using var context = new RestoreTestContext();
+        context.Extractor.Handler = (_, _, _) => Task.FromResult(
+            BackupTestData.Manifest() with { SchemaVersion = 1 });
+        context.Store.StagedInfo = new RestoreDatabaseInfo(
+            1,
+            FakeRestoreStore.Counts(2, 0, 0, 1, 1, 1));
+        context.Migrator.Failure = new InvalidOperationException("simulated migration failure");
+
+        var result = await context.Coordinator.PreflightAsync(context.Request);
+
+        Assert.False(result.CanProceed);
+        Assert.Equal(RestoreErrorCode.PackageInvalid, result.Error!.Code);
+        Assert.Contains("migration_failed", result.Error.Diagnostics);
+        Assert.Equal(0, context.Store.SwitchCalls);
     }
 
     [Fact]
@@ -421,7 +444,8 @@ public sealed class RestoreCoordinatorTests
                 ProtectionBackups,
                 Drafts,
                 DiskSpace,
-                Gate);
+                Gate,
+                Migrator);
         }
 
         public FakeBackupPackageExtractor Extractor { get; } = new();
@@ -430,6 +454,7 @@ public sealed class RestoreCoordinatorTests
         public FakeRestoreDraftStore Drafts { get; } = new();
         public FakeDiskSpaceProvider DiskSpace { get; } = new();
         public DatabaseWriteGate Gate { get; } = new();
+        public FakeSchemaMigrator Migrator { get; } = new();
         public RestoreRequest Request { get; }
         public RestoreCoordinator Coordinator { get; }
 

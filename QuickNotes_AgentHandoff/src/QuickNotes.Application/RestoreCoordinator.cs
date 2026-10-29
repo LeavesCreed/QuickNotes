@@ -7,6 +7,7 @@ namespace QuickNotes.Application;
 public sealed class RestoreCoordinator : IRestoreCoordinator
 {
     public const long SupportedSchemaVersion = 2;
+    private const long MinimumSourceSchemaVersion = 1;
     private const long SpaceSafetyMarginBytes = 16L * 1024 * 1024;
 
     private readonly IBackupPackageExtractor _extractor;
@@ -15,6 +16,7 @@ public sealed class RestoreCoordinator : IRestoreCoordinator
     private readonly INoteDraftStore _drafts;
     private readonly IDiskSpaceProvider _diskSpace;
     private readonly IDatabaseWriteGate _writeGate;
+    private readonly ISchemaMigrator _migrator;
     private readonly ILogger<RestoreCoordinator> _logger;
 
     public RestoreCoordinator(
@@ -24,6 +26,7 @@ public sealed class RestoreCoordinator : IRestoreCoordinator
         INoteDraftStore drafts,
         IDiskSpaceProvider diskSpace,
         IDatabaseWriteGate writeGate,
+        ISchemaMigrator migrator,
         ILogger<RestoreCoordinator>? logger = null)
     {
         _extractor = extractor ?? throw new ArgumentNullException(nameof(extractor));
@@ -32,6 +35,7 @@ public sealed class RestoreCoordinator : IRestoreCoordinator
         _drafts = drafts ?? throw new ArgumentNullException(nameof(drafts));
         _diskSpace = diskSpace ?? throw new ArgumentNullException(nameof(diskSpace));
         _writeGate = writeGate ?? throw new ArgumentNullException(nameof(writeGate));
+        _migrator = migrator ?? throw new ArgumentNullException(nameof(migrator));
         if (writeGate is NoopDatabaseWriteGate)
         {
             throw new ArgumentException(
@@ -157,7 +161,7 @@ public sealed class RestoreCoordinator : IRestoreCoordinator
                     currentCounts: currentInfo.Counts);
             }
 
-            if (manifest.SchemaVersion != SupportedSchemaVersion)
+            if (manifest.SchemaVersion is < MinimumSourceSchemaVersion or > SupportedSchemaVersion)
             {
                 return FailedPreflight(
                     RestoreErrorCode.SchemaIncompatible,
@@ -189,6 +193,56 @@ public sealed class RestoreCoordinator : IRestoreCoordinator
                 return FailedPreflight(
                     RestoreErrorCode.PackageInvalid,
                     "The staged backup schema does not match its manifest.",
+                    manifest: manifest,
+                    backupCounts: backupInfo.Counts,
+                    currentCounts: currentInfo.Counts);
+            }
+
+            var requiresMigration = manifest.SchemaVersion < SupportedSchemaVersion;
+            string? targetHash;
+            try
+            {
+                await _migrator
+                    .MigrateToCurrentAsync(preflightDatabase, rotateIdentity: true, cancellationToken)
+                    .ConfigureAwait(false);
+                backupInfo = await _restoreStore
+                    .InspectAsync(preflightDatabase, cancellationToken)
+                    .ConfigureAwait(false);
+                if (backupInfo.SchemaVersion != SupportedSchemaVersion)
+                {
+                    return FailedPreflight(
+                        RestoreErrorCode.PackageInvalid,
+                        "The prepared backup schema is not supported.",
+                        diagnostics: $"prepared_schema={backupInfo.SchemaVersion}",
+                        manifest: manifest,
+                        backupCounts: backupInfo.Counts,
+                        currentCounts: currentInfo.Counts);
+                }
+
+                targetHash = await _restoreStore
+                    .TryGetDatabaseHashAsync(preflightDatabase, cancellationToken)
+                    .ConfigureAwait(false);
+                if (targetHash is null)
+                {
+                    return FailedPreflight(
+                        RestoreErrorCode.PackageInvalid,
+                        "The prepared backup database could not be hashed.",
+                        diagnostics: "prepared_hash_unavailable",
+                        manifest: manifest,
+                        backupCounts: backupInfo.Counts,
+                        currentCounts: currentInfo.Counts);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                return FailedPreflight(
+                    RestoreErrorCode.PackageInvalid,
+                    "The backup could not be prepared for the current schema.",
+                    diagnostics: $"migration_failed:{exception.GetType().Name}",
                     manifest: manifest,
                     backupCounts: backupInfo.Counts,
                     currentCounts: currentInfo.Counts);
@@ -333,6 +387,10 @@ public sealed class RestoreCoordinator : IRestoreCoordinator
                 BackupCounts = backupInfo.Counts,
                 CurrentCounts = currentInfo.Counts,
                 PendingDraftCount = pendingDraftCount,
+                RequiresMigration = requiresMigration,
+                TargetSchemaVersion = SupportedSchemaVersion,
+                SourceManifestSha256 = manifest.DatabaseSha256,
+                TargetDatabaseSha256 = targetHash,
                 RequiredBytes = requiredCurrent,
                 AvailableBytes = availableCurrent
             };
@@ -555,7 +613,7 @@ public sealed class RestoreCoordinator : IRestoreCoordinator
                     protectionSnapshotPath: protectionPath);
             }
 
-            if (manifest.SchemaVersion != SupportedSchemaVersion)
+            if (manifest.SchemaVersion is < MinimumSourceSchemaVersion or > SupportedSchemaVersion)
             {
                 CleanupDirectory(stagingDirectory);
                 return Failure(
@@ -569,34 +627,57 @@ public sealed class RestoreCoordinator : IRestoreCoordinator
             }
 
             RestoreDatabaseInfo stagedInfo;
+            string? targetHash;
             try
             {
+                await _migrator
+                    .MigrateToCurrentAsync(stagedPath, rotateIdentity: true, cancellationToken)
+                    .ConfigureAwait(false);
                 stagedInfo = await _restoreStore
                     .InspectAsync(stagedPath, cancellationToken)
                     .ConfigureAwait(false);
+                if (stagedInfo.SchemaVersion != SupportedSchemaVersion)
+                {
+                    CleanupDirectory(stagingDirectory);
+                    return Failure(
+                        RestoreStatus.VerificationFailed,
+                        RestoreErrorCode.SchemaIncompatible,
+                        "The staged backup schema is not supported.",
+                        diagnostics: $"staged_schema={stagedInfo.SchemaVersion}",
+                        startedAt: startedAt,
+                        manifest: manifest,
+                        protectionSnapshotPath: protectionPath);
+                }
+
+                targetHash = await _restoreStore
+                    .TryGetDatabaseHashAsync(stagedPath, cancellationToken)
+                    .ConfigureAwait(false);
+                if (targetHash is null)
+                {
+                    CleanupDirectory(stagingDirectory);
+                    return Failure(
+                        RestoreStatus.VerificationFailed,
+                        RestoreErrorCode.PackageInvalid,
+                        "The staged backup database could not be hashed.",
+                        diagnostics: "prepared_hash_unavailable",
+                        startedAt: startedAt,
+                        manifest: manifest,
+                        protectionSnapshotPath: protectionPath);
+                }
             }
-            catch (RestoreException exception)
+            catch (OperationCanceledException)
+            {
+                CleanupDirectory(stagingDirectory);
+                throw;
+            }
+            catch (Exception exception)
             {
                 CleanupDirectory(stagingDirectory);
                 return Failure(
                     RestoreStatus.VerificationFailed,
                     RestoreErrorCode.PackageInvalid,
-                    "The staged backup database could not be inspected.",
-                    diagnostics: exception.ErrorCode,
-                    startedAt: startedAt,
-                    manifest: manifest,
-                    protectionSnapshotPath: protectionPath);
-            }
-
-            if (stagedInfo.SchemaVersion != manifest.SchemaVersion
-                || stagedInfo.SchemaVersion != SupportedSchemaVersion)
-            {
-                CleanupDirectory(stagingDirectory);
-                return Failure(
-                    RestoreStatus.VerificationFailed,
-                    RestoreErrorCode.SchemaIncompatible,
-                    "The staged backup schema is not supported.",
-                    diagnostics: $"staged_schema={stagedInfo.SchemaVersion}",
+                    "The backup could not be prepared for the current schema.",
+                    diagnostics: $"migration_failed:{exception.GetType().Name}",
                     startedAt: startedAt,
                     manifest: manifest,
                     protectionSnapshotPath: protectionPath);
@@ -630,7 +711,7 @@ public sealed class RestoreCoordinator : IRestoreCoordinator
                     && Matches(currentAfter, stagedInfo)
                     && string.Equals(
                         currentAfterHash,
-                        manifest.DatabaseSha256,
+                        targetHash!,
                         StringComparison.Ordinal))
                 {
                     switched = true;
@@ -699,7 +780,7 @@ public sealed class RestoreCoordinator : IRestoreCoordinator
                 && Matches(restored, stagedInfo)
                 && string.Equals(
                     restoredHash,
-                    manifest.DatabaseSha256,
+                    targetHash!,
                     StringComparison.Ordinal))
             {
                 CleanupDirectory(stagingDirectory);
@@ -714,6 +795,9 @@ public sealed class RestoreCoordinator : IRestoreCoordinator
                     Manifest = manifest,
                     RestoredCounts = restored.Counts,
                     ProtectionSnapshotPath = protectionPath,
+                    MigratedFromV1 = manifest.SchemaVersion < SupportedSchemaVersion,
+                    TargetSchemaVersion = SupportedSchemaVersion,
+                    TargetDatabaseSha256 = targetHash,
                     DurationMilliseconds = duration
                 };
             }

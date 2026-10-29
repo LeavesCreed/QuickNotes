@@ -132,6 +132,29 @@ internal sealed class FakeRestoreStore : IRestoreStore
         new(active, archived, trash, categories, tags, noteTags);
 }
 
+internal sealed class FakeSchemaMigrator : ISchemaMigrator
+{
+    public SchemaMigrationOutcome Outcome { get; set; } =
+        new(2, 2, Guid.NewGuid(), Migrated: false, IdentityRotated: true);
+
+    public Exception? Failure { get; set; }
+    public int Calls { get; private set; }
+
+    public Task<SchemaMigrationOutcome> MigrateToCurrentAsync(
+        string databasePath,
+        bool rotateIdentity,
+        CancellationToken cancellationToken = default)
+    {
+        Calls++;
+        if (Failure is not null)
+        {
+            throw Failure;
+        }
+
+        return Task.FromResult(Outcome);
+    }
+}
+
 internal sealed class FakeRestoreDraftStore : INoteDraftStore
 {
     public List<NoteDraft> Drafts { get; } = new();

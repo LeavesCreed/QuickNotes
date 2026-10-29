@@ -12,6 +12,7 @@ public sealed class MissingDatabaseRebuilder
     private readonly DesktopPaths _paths;
     private readonly IBackupPackageExtractor _extractor;
     private readonly IRestoreStore _restoreStore;
+    private readonly ISchemaMigrator _migrator;
     private readonly ApplicationStateStore _stateStore;
     private readonly DiagnosticLog _log;
     private readonly TimeProvider _timeProvider;
@@ -20,6 +21,7 @@ public sealed class MissingDatabaseRebuilder
         DesktopPaths paths,
         IBackupPackageExtractor extractor,
         IRestoreStore restoreStore,
+        ISchemaMigrator migrator,
         ApplicationStateStore stateStore,
         DiagnosticLog log,
         TimeProvider? timeProvider = null)
@@ -27,6 +29,7 @@ public sealed class MissingDatabaseRebuilder
         _paths = paths ?? throw new ArgumentNullException(nameof(paths));
         _extractor = extractor ?? throw new ArgumentNullException(nameof(extractor));
         _restoreStore = restoreStore ?? throw new ArgumentNullException(nameof(restoreStore));
+        _migrator = migrator ?? throw new ArgumentNullException(nameof(migrator));
         _stateStore = stateStore ?? throw new ArgumentNullException(nameof(stateStore));
         _log = log ?? throw new ArgumentNullException(nameof(log));
         _timeProvider = timeProvider ?? TimeProvider.System;
@@ -132,7 +135,7 @@ public sealed class MissingDatabaseRebuilder
             var manifest = await _extractor
                 .ExtractAsync(packagePath, stagedPath, cancellationToken)
                 .ConfigureAwait(false);
-            if (manifest.SchemaVersion != SupportedSchemaVersion)
+            if (manifest.SchemaVersion is < 1 or > SupportedSchemaVersion)
             {
                 return Failed(
                     "schema_unsupported",
@@ -140,15 +143,49 @@ public sealed class MissingDatabaseRebuilder
                     stagingDirectory);
             }
 
-            var stagedInfo = await _restoreStore
-                .InspectAsync(stagedPath, cancellationToken)
-                .ConfigureAwait(false);
-            if (stagedInfo.SchemaVersion != manifest.SchemaVersion
-                || stagedInfo.SchemaVersion != SupportedSchemaVersion)
+            RestoreDatabaseInfo stagedInfo;
+            string? targetHash;
+            try
             {
+                await _migrator
+                    .MigrateToCurrentAsync(stagedPath, rotateIdentity: true, cancellationToken)
+                    .ConfigureAwait(false);
+                stagedInfo = await _restoreStore
+                    .InspectAsync(stagedPath, cancellationToken)
+                    .ConfigureAwait(false);
+                if (stagedInfo.SchemaVersion != SupportedSchemaVersion)
+                {
+                    return Failed(
+                        "package_invalid",
+                        "The staged backup schema is not supported.",
+                        stagingDirectory);
+                }
+
+                targetHash = await _restoreStore
+                    .TryGetDatabaseHashAsync(stagedPath, cancellationToken)
+                    .ConfigureAwait(false);
+                if (targetHash is null)
+                {
+                    return Failed(
+                        "package_invalid",
+                        "The prepared backup database could not be hashed.",
+                        stagingDirectory);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                _log.TryWrite(
+                    "ERROR",
+                    "missing_database_rebuild",
+                    "backup could not be prepared for the current schema",
+                    $"migration_failed:{exception.GetType().Name}");
                 return Failed(
-                    "package_invalid",
-                    "The staged backup schema does not match its manifest.",
+                    "migration_failed",
+                    "The backup could not be prepared for the current schema.",
                     stagingDirectory);
             }
 
@@ -181,7 +218,7 @@ public sealed class MissingDatabaseRebuilder
             try
             {
                 verified = await VerifyPublishedAsync(
-                        manifest,
+                        targetHash!,
                         stagedInfo,
                         cancellationToken)
                     .ConfigureAwait(false);
@@ -216,6 +253,7 @@ public sealed class MissingDatabaseRebuilder
                         state with
                         {
                             LastStartupUtc = now,
+                            SchemaVersion = (int)SupportedSchemaVersion,
                             WritesBlocked = false,
                             WriteBlockReason = null,
                             WriteBlockedAtUtc = null,
@@ -251,6 +289,8 @@ public sealed class MissingDatabaseRebuilder
                 StagingDirectory = stagingDirectory,
                 QuarantinePath = quarantinePath,
                 ProtectionSnapshotCreated = false,
+                MigratedFromV1 = manifest.SchemaVersion < SupportedSchemaVersion,
+                TargetDatabaseSha256 = targetHash,
                 StateWarning = stateWarning
             };
         }
@@ -300,14 +340,14 @@ public sealed class MissingDatabaseRebuilder
     }
 
     private async Task<(bool IsVerified, string? ErrorCode, RestoreCounts Counts)> VerifyPublishedAsync(
-        BackupManifest manifest,
+        string targetHash,
         RestoreDatabaseInfo stagedInfo,
         CancellationToken cancellationToken)
     {
         var hash = await _restoreStore
             .TryGetDatabaseHashAsync(_paths.DatabasePath, cancellationToken)
             .ConfigureAwait(false);
-        if (!string.Equals(hash, manifest.DatabaseSha256, StringComparison.Ordinal))
+        if (!string.Equals(hash, targetHash, StringComparison.Ordinal))
         {
             return (false, "post_publish_hash_mismatch", stagedInfo.Counts);
         }

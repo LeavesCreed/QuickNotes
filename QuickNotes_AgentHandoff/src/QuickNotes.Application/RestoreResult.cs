@@ -9,6 +9,9 @@ public sealed record RestoreResult
     public RestoreError? Error { get; init; }
     public bool RolledBack { get; init; }
     public bool WritesBlocked { get; init; }
+    public bool MigratedFromV1 { get; init; }
+    public long TargetSchemaVersion { get; init; }
+    public string? TargetDatabaseSha256 { get; init; }
     public string? RecoveryHint { get; init; }
     public long DurationMilliseconds { get; init; }
 }

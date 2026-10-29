@@ -155,6 +155,7 @@ public sealed class MissingDatabaseRebuilderTests
             paths,
             new BackupPackageVerifier(),
             new BadHashRestoreStore(new SqliteRestoreStore(), paths.DatabasePath),
+            new SqliteSchemaMigrator(),
             stateStore,
             new DiagnosticLog(paths.LogDirectory, new TestTimeProvider(Now)),
             new TestTimeProvider(Now));
@@ -168,6 +169,68 @@ public sealed class MissingDatabaseRebuilderTests
         Assert.Null((await stateStore.ReadAsync()).State!.RecoverySourceSha256);
     }
 
+    [Fact]
+    public async Task Rebuild_V1Package_MigratesToV2AndUsesTargetHash()
+    {
+        using var temporary = new TestTemporaryDirectory();
+        var paths = DesktopPaths.Create(Path.Combine(temporary.RootPath, "data"));
+        var stateStore = new ApplicationStateStore(paths.StatePath);
+        await stateStore.WriteAsync(CreateReadyState());
+        var v1Path = Path.Combine(temporary.RootPath, "v1.db");
+        await SchemaMigrationTestDatabase.CreateVersionOneAsync(v1Path);
+        var noteId = Guid.NewGuid();
+        await ExecuteAsync(
+            new SqliteConnectionFactory(v1Path),
+            $"""
+            INSERT INTO notes
+                (id, title, body, created_at_utc, modified_at_utc, version,
+                 lifecycle, category_id, is_pinned, display_intent)
+            VALUES
+                ('{noteId:D}', 'v1 title', 'v1 body',
+                 '2026-10-28T09:30:00.0000000+00:00',
+                 '2026-10-28T09:30:00.0000000+00:00',
+                 1, 0, '{Category.UncategorizedId:D}', 0, 1);
+            """);
+        var snapshotPath = Path.Combine(temporary.RootPath, "v1-snapshot.db");
+        await new SqliteSnapshotProvider(v1Path).CreateAsync(snapshotPath);
+        var backupDirectory = Path.Combine(temporary.RootPath, "backups");
+        Directory.CreateDirectory(backupDirectory);
+        var package = await new ZipBackupPackageStore().PublishAsync(
+            snapshotPath,
+            1,
+            new BackupRequest
+            {
+                BackupDirectory = backupDirectory,
+                Type = BackupType.Manual
+            },
+            Now,
+            Now.ToOffset(TimeSpan.FromHours(8)));
+        var rebuilder = CreateRebuilder(paths, stateStore);
+
+        var result = await rebuilder.RebuildAsync(package.PackagePath, quarantineCorruptCurrent: false);
+
+        Assert.Equal(MissingDatabaseRebuildStatus.Succeeded, result.Status);
+        Assert.True(result.MigratedFromV1);
+        Assert.Equal(
+            result.TargetDatabaseSha256,
+            await new SqliteRestoreStore().TryGetDatabaseHashAsync(paths.DatabasePath));
+        var restored = await new SqliteNoteRepository(
+            new SqliteConnectionFactory(paths.DatabasePath)).GetAsync(noteId);
+        Assert.NotNull(restored);
+        Assert.Equal("v1 body", restored!.Body);
+        var state = await stateStore.ReadAsync();
+        Assert.Equal(2, state.State!.SchemaVersion);
+        Assert.Equal(package.Manifest.DatabaseSha256, state.State.RecoverySourceSha256);
+    }
+
+    private static async Task ExecuteAsync(SqliteConnectionFactory factory, string sql)
+    {
+        await using var connection = await factory.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        await command.ExecuteNonQueryAsync();
+    }
+
     private static MissingDatabaseRebuilder CreateRebuilder(
         DesktopPaths paths,
         ApplicationStateStore stateStore) =>
@@ -175,6 +238,7 @@ public sealed class MissingDatabaseRebuilderTests
             paths,
             new BackupPackageVerifier(),
             new SqliteRestoreStore(),
+            new SqliteSchemaMigrator(),
             stateStore,
             new DiagnosticLog(paths.LogDirectory, new TestTimeProvider(Now)),
             new TestTimeProvider(Now));

@@ -85,7 +85,8 @@ public sealed class RestoreIntegrationTests
             protectionCoordinator,
             draftStore,
             new DriveInfoDiskSpaceProvider(),
-            gate);
+            gate,
+            new SqliteSchemaMigrator());
         var request = new RestoreRequest
         {
             PackagePath = package.PackagePath,
@@ -249,6 +250,90 @@ public sealed class RestoreIntegrationTests
         Assert.NotNull(await current.Notes.GetAsync(currentNote.Id));
     }
 
+    [Fact]
+    public async Task Restore_V1Package_MigratesToV2AndUsesTargetHash()
+    {
+        using var temporary = new TemporaryDirectory();
+        var v1Path = Path.Combine(temporary.RootPath, "v1.db");
+        await TestDatabase.CreateVersionOneAsync(v1Path);
+        var v1NoteId = Guid.NewGuid();
+        await ExecuteAsync(
+            new SqliteConnectionFactory(v1Path),
+            $"""
+            INSERT INTO notes
+                (id, title, body, created_at_utc, modified_at_utc, version,
+                 lifecycle, category_id, is_pinned, display_intent)
+            VALUES
+                ('{v1NoteId:D}', 'v1 title', 'v1 body',
+                 '2026-10-28T09:30:00.0000000+00:00',
+                 '2026-10-28T09:30:00.0000000+00:00',
+                 1, 0, '{Category.UncategorizedId:D}', 0, 1);
+            """);
+        var snapshotPath = Path.Combine(temporary.RootPath, "v1-snapshot.db");
+        await new SqliteSnapshotProvider(v1Path).CreateAsync(snapshotPath);
+        var backupDirectory = Path.Combine(temporary.RootPath, "backups");
+        Directory.CreateDirectory(backupDirectory);
+        var utcNow = DateTimeOffset.UtcNow;
+        var package = await new ZipBackupPackageStore().PublishAsync(
+            snapshotPath,
+            1,
+            new BackupRequest
+            {
+                BackupDirectory = backupDirectory,
+                Type = BackupType.Manual
+            },
+            utcNow,
+            TimeZoneInfo.ConvertTime(utcNow, TimeZoneInfo.Local));
+        using var current = await TestDatabase.CreateAsync();
+        using var draftDirectory = new TemporaryDirectory();
+        var coordinator = new RestoreCoordinator(
+            new BackupPackageVerifier(),
+            new SqliteRestoreStore(),
+            new BackupCoordinator(
+                new SqliteSnapshotProvider(current.DatabasePath),
+                new ZipBackupPackageStore()),
+            new FileNoteDraftStore(draftDirectory.DraftDirectory),
+            new DriveInfoDiskSpaceProvider(),
+            new DatabaseWriteGate(),
+            new SqliteSchemaMigrator());
+        var request = new RestoreRequest
+        {
+            PackagePath = package.PackagePath,
+            CurrentDatabasePath = current.DatabasePath,
+            BackupDirectory = backupDirectory,
+            AllowPendingDrafts = true
+        };
+        var deviceSettingsPath = Path.Combine(temporary.RootPath, "device-settings.json");
+        const string deviceSettings = """{"formatVersion":1,"backupDirectory":null}""";
+        await File.WriteAllTextAsync(deviceSettingsPath, deviceSettings);
+
+        var preflight = await coordinator.PreflightAsync(request);
+
+        Assert.True(preflight.CanProceed);
+        Assert.True(preflight.RequiresMigration);
+        Assert.Equal(2, preflight.TargetSchemaVersion);
+        Assert.Equal(package.Manifest.DatabaseSha256, preflight.SourceManifestSha256);
+        Assert.NotNull(preflight.TargetDatabaseSha256);
+        Assert.NotEqual(package.Manifest.DatabaseSha256, preflight.TargetDatabaseSha256);
+
+        var result = await coordinator.RestoreAsync(request);
+
+        Assert.Equal(RestoreStatus.Succeeded, result.Status);
+        Assert.True(result.MigratedFromV1);
+        Assert.Equal(2, result.TargetSchemaVersion);
+        Assert.Equal(
+            result.TargetDatabaseSha256,
+            await new SqliteRestoreStore().TryGetDatabaseHashAsync(current.DatabasePath));
+        Assert.Equal(deviceSettings, await File.ReadAllTextAsync(deviceSettingsPath));
+        var notes = new SqliteNoteRepository(new SqliteConnectionFactory(current.DatabasePath));
+        var restored = Assert.Single(await notes.ListAsync(NoteLifecycle.Active));
+        Assert.Equal(v1NoteId, restored.Id);
+        Assert.Equal("v1 body", restored.Body);
+        Assert.Equal(
+            2,
+            (await new SqliteRestoreStore().InspectAsync(current.DatabasePath)).SchemaVersion);
+    }
+
     private static RestoreCoordinator CreateCoordinator(
         string currentDatabasePath,
         string backupDirectory,
@@ -262,7 +347,8 @@ public sealed class RestoreIntegrationTests
                 new ZipBackupPackageStore()),
             draftStore,
             new DriveInfoDiskSpaceProvider(),
-            new DatabaseWriteGate());
+            new DatabaseWriteGate(),
+            new SqliteSchemaMigrator());
     }
 
     private static async Task ExecuteAsync(SqliteConnectionFactory factory, string sql)

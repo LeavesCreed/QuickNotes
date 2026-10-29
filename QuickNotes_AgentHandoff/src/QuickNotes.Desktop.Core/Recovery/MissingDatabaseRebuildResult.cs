@@ -11,6 +11,8 @@ public sealed record MissingDatabaseRebuildResult
     public string? StagingDirectory { get; init; }
     public string? QuarantinePath { get; init; }
     public bool ProtectionSnapshotCreated { get; init; }
+    public bool MigratedFromV1 { get; init; }
+    public string? TargetDatabaseSha256 { get; init; }
     public bool WritesBlocked { get; init; }
     public string? StateWarning { get; init; }
 }
