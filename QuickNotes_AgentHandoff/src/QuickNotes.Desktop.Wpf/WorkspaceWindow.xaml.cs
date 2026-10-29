@@ -231,6 +231,11 @@ public partial class WorkspaceWindow : Window
             _suppressSelection = true;
             NotesList.SelectedItem = null;
             _suppressSelection = false;
+            if (_noteWindows is not null)
+            {
+                await _noteWindows.OpenNewSessionAsync(session);
+            }
+
             UpdateStatus();
         }
         catch (Exception exception)
@@ -358,7 +363,66 @@ public partial class WorkspaceWindow : Window
 
     private void Session_StatusChanged(object? sender, EventArgs e)
     {
-        Dispatcher.BeginInvoke(UpdateStatus);
+        Dispatcher.BeginInvoke(() =>
+        {
+            ApplySessionStateFromCurrent();
+            UpdateStatus();
+            if (_session?.Status.SaveState == EditorSaveState.Saved)
+            {
+                _ = RefreshNotesAsync();
+            }
+        });
+    }
+
+    private void ApplySessionStateFromCurrent()
+    {
+        if (_loadingEditor || _session is null || _session.IsDisposed)
+        {
+            return;
+        }
+
+        _loadingEditor = true;
+        try
+        {
+            var title = _session.Title ?? string.Empty;
+            if (!string.Equals(TitleBox.Text, title, StringComparison.Ordinal))
+            {
+                TitleBox.Text = title;
+            }
+
+            if (!string.Equals(BodyBox.Text, _session.Body, StringComparison.Ordinal))
+            {
+                BodyBox.Text = _session.Body;
+            }
+
+            var category = _categories
+                .FirstOrDefault(candidate => candidate.Id == _session.CategoryId);
+            if (!ReferenceEquals(CategoryEditorCombo.SelectedItem, category))
+            {
+                CategoryEditorCombo.SelectedItem = category;
+            }
+
+            PinCheckBox.IsChecked = _session.IsPinned;
+            ColorModeCombo.SelectedItem = ColorModeCombo.Items
+                .OfType<ColorModeItem>()
+                .FirstOrDefault(item => item.Mode == _session.ColorMode);
+            ColorHexBox.Text = _session.ColorHex ?? string.Empty;
+            ColorHexBox.IsEnabled = _session.ColorMode == NoteColorMode.Manual;
+            FontSizeBox.Text = _session.FontSize?.ToString() ?? string.Empty;
+            TagsEditorList.SelectedItems.Clear();
+            foreach (var tagId in _session.TagIds)
+            {
+                var tag = _tags.FirstOrDefault(candidate => candidate.Id == tagId);
+                if (tag is not null)
+                {
+                    TagsEditorList.SelectedItems.Add(tag);
+                }
+            }
+        }
+        finally
+        {
+            _loadingEditor = false;
+        }
     }
 
     private async void NotesList_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -397,7 +461,9 @@ public partial class WorkspaceWindow : Window
         var single = selected.Length == 1;
         ArchiveButton.IsEnabled = !_restoreFrozen && _navKind == NavKind.Active && single;
         TrashButton.IsEnabled = !_restoreFrozen && _navKind == NavKind.Active && single;
-        RestoreButton.IsEnabled = !_restoreFrozen && _navKind == NavKind.Trash && single;
+        RestoreButton.IsEnabled = !_restoreFrozen
+            && (_navKind == NavKind.Archived || _navKind == NavKind.Trash)
+            && single;
         DeleteButton.IsEnabled = !_restoreFrozen && _navKind == NavKind.Trash && single;
         CopyButton.IsEnabled = !_restoreFrozen && single;
         ToggleDisplayButton.IsEnabled = !_restoreFrozen && single && _session is not null;
@@ -428,6 +494,9 @@ public partial class WorkspaceWindow : Window
             CategoryEditorCombo.SelectedItem = null;
             TagsEditorList.SelectedItems.Clear();
             PinCheckBox.IsChecked = false;
+            ColorModeCombo.SelectedItem = null;
+            ColorHexBox.Text = string.Empty;
+            FontSizeBox.Text = string.Empty;
             _loadingEditor = false;
             UpdateButtons();
             return;
@@ -867,11 +936,26 @@ public partial class WorkspaceWindow : Window
 
         var noteId = _session.NoteId;
         var version = _session.Status.BaseVersion;
+        var fromArchive = _navKind == NavKind.Archived;
         try
         {
             await CaptureUndoAsync(ManagementUndoKind.Lifecycle, new[] { noteId });
-            await _services.Management.RestoreFromTrashAsync(noteId, version);
+            if (fromArchive)
+            {
+                await _services.Management.UnarchiveAsync(noteId, version);
+            }
+            else
+            {
+                await _services.Management.RestoreFromTrashAsync(noteId, version);
+            }
+
             await RefreshAfterManagementAsync();
+            _navKind = NavKind.Active;
+            _suppressSelection = true;
+            NavigationList.SelectedIndex = 0;
+            _suppressSelection = false;
+            await RefreshNotesAsync();
+            await SelectNoteAsync(noteId);
         }
         catch (Exception exception)
         {

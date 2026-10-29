@@ -164,6 +164,7 @@
                 <TextBlock Text="标题" Foreground="#555555" />
                 <TextBox x:Name="TitleBox"
                          Grid.Row="1"
+                         AutomationProperties.Name="管理中心标题"
                          Margin="0,4,0,8"
                          Padding="6"
                          TextChanged="EditorTextChanged"
@@ -232,6 +233,7 @@
 
                 <TextBox x:Name="BodyBox"
                          Grid.Row="6"
+                         AutomationProperties.Name="管理中心正文"
                          Margin="0,0,0,8"
                          Padding="6"
                          AcceptsReturn="True"

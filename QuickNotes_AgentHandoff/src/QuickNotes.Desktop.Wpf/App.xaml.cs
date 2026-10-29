@@ -239,6 +239,7 @@ public partial class App : System.Windows.Application
         await UpdateTrayStateAsync();
         if (_noteWindows is not null)
         {
+            await _noteWindows.RefreshSettingsAsync();
             await _noteWindows.RefreshAsync();
         }
 

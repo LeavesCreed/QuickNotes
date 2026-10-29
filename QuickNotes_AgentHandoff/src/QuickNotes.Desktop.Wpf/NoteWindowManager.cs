@@ -1,6 +1,8 @@
 ﻿using System.Windows.Threading;
 using QuickNotes.Application;
+using QuickNotes.Desktop.Editing;
 using QuickNotes.Desktop.Hosting;
+using QuickNotes.Desktop.Windows;
 using QuickNotes.Domain;
 
 namespace QuickNotes.Desktop.Wpf;
@@ -10,6 +12,7 @@ public sealed class NoteWindowManager : IAsyncDisposable
     private readonly DesktopApplicationHost _host;
     private readonly DesktopEditingServices _services;
     private readonly Dictionary<Guid, NoteWindow> _windows = new();
+    private readonly HashSet<Guid> _pendingNewNoteIds = new();
     private readonly SemaphoreSlim _syncGate = new(1, 1);
     private readonly DispatcherTimer _timer;
     private readonly WindowPlacementService _placement = new();
@@ -71,25 +74,36 @@ public sealed class NoteWindowManager : IAsyncDisposable
                     .Where(note => note.DisplayIntent == NoteDisplayIntent.Visible)
                     .ToDictionary(note => note.Id);
 
-            foreach (var (noteId, window) in _windows.ToArray())
+            if (settings.GlobalHidden && _windows.Count > 0)
             {
-                if (!desired.ContainsKey(noteId))
+                await CloseAllWindowsAsync();
+                _pendingNewNoteIds.Clear();
+                return;
+            }
+
+            var plan = NoteWindowSyncPlanner.Plan(
+                desired.Keys,
+                _windows.Keys,
+                _pendingNewNoteIds,
+                noteId => _windows.TryGetValue(noteId, out var window) && window.Session.IsNew);
+            _pendingNewNoteIds.Clear();
+            foreach (var noteId in plan.PendingNewNoteIds)
+            {
+                _pendingNewNoteIds.Add(noteId);
+            }
+
+            foreach (var noteId in plan.Close)
+            {
+                if (_windows.TryGetValue(noteId, out var window))
                 {
                     await CloseWindowAsync(noteId, window);
                 }
             }
 
-            var index = 0;
-            foreach (var (noteId, note) in desired)
+            foreach (var noteId in plan.Create)
             {
-                index++;
-                if (_windows.TryGetValue(noteId, out var existing))
+                if (!desired.TryGetValue(noteId, out var note))
                 {
-                    if (!existing.IsVisible)
-                    {
-                        existing.Show();
-                    }
-
                     continue;
                 }
 
@@ -102,7 +116,7 @@ public sealed class NoteWindowManager : IAsyncDisposable
                     window.ApplyPlacement(
                         note.WindowLayout,
                         bindings.TryGetValue(noteId, out var displayId) ? displayId : null,
-                        index - 1);
+                        _windows.Count);
                     _windows[noteId] = window;
                     window.Show();
                 }
@@ -113,6 +127,14 @@ public sealed class NoteWindowManager : IAsyncDisposable
                         "note_windows",
                         "note window creation failed",
                         exception.GetType().Name);
+                }
+            }
+
+            foreach (var noteId in plan.KeepOpen)
+            {
+                if (_windows.TryGetValue(noteId, out var window) && !window.IsVisible)
+                {
+                    window.Show();
                 }
             }
         }
@@ -127,6 +149,73 @@ public sealed class NoteWindowManager : IAsyncDisposable
         finally
         {
             _syncGate.Release();
+        }
+    }
+
+    public async Task OpenNewSessionAsync(NoteEditorSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        if (_disposed)
+        {
+            return;
+        }
+
+        await _syncGate.WaitAsync();
+        try
+        {
+            if (_windows.TryGetValue(session.NoteId, out var existing))
+            {
+                if (session.IsNew)
+                {
+                    _pendingNewNoteIds.Add(session.NoteId);
+                }
+
+                existing.Show();
+                await existing.ActivateAsync();
+                return;
+            }
+
+            var shared = await _services.Sessions.GetOrOpenAsync(session.NoteId);
+            var window = new NoteWindow(_host, shared, _placement);
+            window.HideRequested += OnHideRequested;
+            window.Closed += OnWindowClosed;
+            window.ApplyPlacement(null, null, _windows.Count);
+            _windows[session.NoteId] = window;
+            if (shared.IsNew)
+            {
+                _pendingNewNoteIds.Add(session.NoteId);
+            }
+
+            window.Show();
+            await window.ActivateAsync();
+        }
+        finally
+        {
+            _syncGate.Release();
+        }
+    }
+
+    public async Task RefreshSettingsAsync()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        foreach (var window in _windows.Values.ToArray())
+        {
+            try
+            {
+                await window.RefreshAsync();
+            }
+            catch (Exception exception)
+            {
+                _host.Log.TryWrite(
+                    "WARN",
+                    "note_windows",
+                    "window settings refresh failed",
+                    exception.GetType().Name);
+            }
         }
     }
 
@@ -262,6 +351,7 @@ public sealed class NoteWindowManager : IAsyncDisposable
 
         window.HideRequested -= OnHideRequested;
         window.Closed -= OnWindowClosed;
+        _pendingNewNoteIds.Remove(noteId);
         try
         {
             await window.Session.FlushDraftAsync();
@@ -349,5 +439,6 @@ public sealed class NoteWindowManager : IAsyncDisposable
         }
 
         _windows.Clear();
+        _pendingNewNoteIds.Clear();
     }
 }

@@ -6,3 +6,6 @@ global using MenuItem = System.Windows.Controls.MenuItem;
 global using OpenFileDialog = Microsoft.Win32.OpenFileDialog;
 global using KeyEventArgs = System.Windows.Input.KeyEventArgs;
 global using TextBox = System.Windows.Controls.TextBox;
+global using Button = System.Windows.Controls.Button;
+global using ContextMenu = System.Windows.Controls.ContextMenu;
+global using ButtonBase = System.Windows.Controls.Primitives.ButtonBase;

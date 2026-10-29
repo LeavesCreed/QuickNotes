@@ -43,10 +43,26 @@
                                       Padding="6,2"
                                       Margin="0,0,4,0"
                                       Click="PinButton_Click" />
+                        <Button x:Name="CategoryButton"
+                                Content="分类"
+                                Padding="6,2"
+                                Margin="0,0,4,0"
+                                Click="CategoryButton_Click" />
+                        <Button x:Name="ColorButton"
+                                Content="颜色"
+                                Padding="6,2"
+                                Margin="0,0,4,0"
+                                Click="ColorButton_Click" />
+                        <Button x:Name="FontSizeButton"
+                                Content="字号"
+                                Padding="6,2"
+                                Margin="0,0,4,0"
+                                Click="FontSizeButton_Click" />
                         <Button x:Name="MoreButton"
                                 Content="更多"
                                 Padding="6,2"
-                                Margin="0,0,4,0">
+                                Margin="0,0,4,0"
+                                Click="MoreButton_Click">
                             <Button.ContextMenu>
                                 <ContextMenu>
                                     <MenuItem Header="隐藏便签" Click="HideMenuItem_Click" />

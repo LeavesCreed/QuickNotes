@@ -1,7 +1,8 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -20,6 +21,9 @@ public partial class NoteWindow : Window
     private readonly DesktopApplicationHost _host;
     private readonly NoteEditorSession _session;
     private readonly WindowPlacementService _placement;
+    private readonly ContextMenu _categoryQuickMenu = new();
+    private readonly ContextMenu _colorQuickMenu = new();
+    private readonly ContextMenu _fontSizeQuickMenu = new();
     private bool _syncing;
     private bool _allowClose;
     private bool _savingOnHide;
@@ -42,9 +46,15 @@ public partial class NoteWindow : Window
         LocationChanged += NoteWindow_LayoutChanged;
         SizeChanged += NoteWindow_LayoutChanged;
         Loaded += NoteWindow_Loaded;
+        CategoryButton.ContextMenu = _categoryQuickMenu;
+        ColorButton.ContextMenu = _colorQuickMenu;
+        FontSizeButton.ContextMenu = _fontSizeQuickMenu;
         BuildCategoryMenu();
         BuildColorMenu();
         BuildFontSizeMenu();
+        BuildCategoryQuickMenu();
+        BuildColorQuickMenu();
+        BuildFontSizeQuickMenu();
     }
 
     public Guid NoteId => _session.NoteId;
@@ -80,6 +90,15 @@ public partial class NoteWindow : Window
         MoreButton.Visibility = actions.Contains(TopBarAction.More)
             ? Visibility.Visible
             : Visibility.Collapsed;
+        CategoryButton.Visibility = actions.Contains(TopBarAction.Category)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        ColorButton.Visibility = actions.Contains(TopBarAction.Color)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        FontSizeButton.Visibility = actions.Contains(TopBarAction.FontSize)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
         ColorMenu.Visibility = actions.Contains(TopBarAction.Color)
             ? Visibility.Visible
             : Visibility.Collapsed;
@@ -90,6 +109,7 @@ public partial class NoteWindow : Window
             ? Visibility.Visible
             : Visibility.Collapsed;
         BuildCategoryMenu();
+        BuildCategoryQuickMenu();
         await ApplySessionStateAsync();
     }
 
@@ -352,10 +372,56 @@ public partial class NoteWindow : Window
 
     private void TopBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
+        if (IsInsideButton(e.OriginalSource as DependencyObject))
+        {
+            return;
+        }
+
         if (e.ButtonState == MouseButtonState.Pressed)
         {
             DragMove();
         }
+    }
+
+    private static bool IsInsideButton(DependencyObject? source)
+    {
+        while (source is not null)
+        {
+            if (source is ButtonBase)
+            {
+                return true;
+            }
+
+            source = source is Visual or System.Windows.Media.Media3D.Visual3D
+                ? VisualTreeHelper.GetParent(source)
+                : LogicalTreeHelper.GetParent(source);
+        }
+
+        return false;
+    }
+
+    private void MoreButton_Click(object sender, RoutedEventArgs e) =>
+        OpenMenu(MoreButton);
+
+    private void CategoryButton_Click(object sender, RoutedEventArgs e) =>
+        OpenMenu(CategoryButton);
+
+    private void ColorButton_Click(object sender, RoutedEventArgs e) =>
+        OpenMenu(ColorButton);
+
+    private void FontSizeButton_Click(object sender, RoutedEventArgs e) =>
+        OpenMenu(FontSizeButton);
+
+    private static void OpenMenu(Button button)
+    {
+        if (button.ContextMenu is null)
+        {
+            return;
+        }
+
+        button.ContextMenu.PlacementTarget = button;
+        button.ContextMenu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+        button.ContextMenu.IsOpen = true;
     }
 
     private async void PinButton_Click(object sender, RoutedEventArgs e)
@@ -508,83 +574,129 @@ public partial class NoteWindow : Window
                 IsCheckable = true,
                 IsChecked = category.Id == _session.CategoryId
             };
-            item.Click += async (_, _) =>
-            {
-                try
-                {
-                    _session.ChangeCategory(category.Id);
-                    await SaveAsync();
-                    await ApplySessionStateAsync();
-                }
-                catch (Exception exception)
-                {
-                    _host.Log.TryWrite(
-                        "ERROR",
-                        "note_window",
-                        "category change failed",
-                        exception.GetType().Name);
-                }
-            };
+            item.Click += async (_, _) => await ChangeCategoryAsync(category);
             CategoryMenu.Items.Add(item);
+        }
+    }
+
+    private async Task ChangeCategoryAsync(Category category)
+    {
+        try
+        {
+            _session.ChangeCategory(category.Id);
+            await SaveAsync();
+            await ApplySessionStateAsync();
+        }
+        catch (Exception exception)
+        {
+            _host.Log.TryWrite(
+                "ERROR",
+                "note_window",
+                "category change failed",
+                exception.GetType().Name);
+        }
+    }
+
+    private void BuildCategoryQuickMenu()
+    {
+        _categoryQuickMenu.Items.Clear();
+        foreach (var category in _categories)
+        {
+            var item = new MenuItem
+            {
+                Header = category.Name,
+                IsCheckable = true,
+                IsChecked = category.Id == _session.CategoryId
+            };
+            item.Click += async (_, _) => await ChangeCategoryAsync(category);
+            _categoryQuickMenu.Items.Add(item);
         }
     }
 
     private void BuildColorMenu()
     {
         ColorMenu.Items.Clear();
-        AddColorItem("跟随分类", NoteColorMode.FollowCategory, null);
-        AddColorItem("黄色", NoteColorMode.Manual, "#FFF3B0");
-        AddColorItem("蓝色", NoteColorMode.Manual, "#CFE8FF");
-        AddColorItem("粉色", NoteColorMode.Manual, "#FFD6E7");
-        AddColorItem("绿色", NoteColorMode.Manual, "#D8F3DC");
+        AddColorItem(ColorMenu.Items, "跟随分类", NoteColorMode.FollowCategory, null);
+        AddColorItem(ColorMenu.Items, "黄色", NoteColorMode.Manual, "#FFF3B0");
+        AddColorItem(ColorMenu.Items, "蓝色", NoteColorMode.Manual, "#CFE8FF");
+        AddColorItem(ColorMenu.Items, "粉色", NoteColorMode.Manual, "#FFD6E7");
+        AddColorItem(ColorMenu.Items, "绿色", NoteColorMode.Manual, "#D8F3DC");
     }
 
-    private void AddColorItem(string header, NoteColorMode mode, string? colorHex)
+    private void BuildColorQuickMenu()
+    {
+        _colorQuickMenu.Items.Clear();
+        AddColorItem(_colorQuickMenu.Items, "跟随分类", NoteColorMode.FollowCategory, null);
+        AddColorItem(_colorQuickMenu.Items, "黄色", NoteColorMode.Manual, "#FFF3B0");
+        AddColorItem(_colorQuickMenu.Items, "蓝色", NoteColorMode.Manual, "#CFE8FF");
+        AddColorItem(_colorQuickMenu.Items, "粉色", NoteColorMode.Manual, "#FFD6E7");
+        AddColorItem(_colorQuickMenu.Items, "绿色", NoteColorMode.Manual, "#D8F3DC");
+    }
+
+    private void AddColorItem(
+        ItemCollection target,
+        string header,
+        NoteColorMode mode,
+        string? colorHex)
     {
         var item = new MenuItem { Header = header };
-        item.Click += async (_, _) =>
+        item.Click += async (_, _) => await ChangeColorAsync(mode, colorHex);
+        target.Add(item);
+    }
+
+    private async Task ChangeColorAsync(NoteColorMode mode, string? colorHex)
+    {
+        try
         {
-            try
-            {
-                _session.ChangeAppearance(mode, colorHex, _session.FontSize);
-                await SaveAsync();
-                await ApplySessionStateAsync();
-            }
-            catch (Exception exception)
-            {
-                _host.Log.TryWrite("ERROR", "note_window", "color change failed", exception.GetType().Name);
-            }
-        };
-        ColorMenu.Items.Add(item);
+            _session.ChangeAppearance(mode, colorHex, _session.FontSize);
+            await SaveAsync();
+            await ApplySessionStateAsync();
+        }
+        catch (Exception exception)
+        {
+            _host.Log.TryWrite("ERROR", "note_window", "color change failed", exception.GetType().Name);
+        }
     }
 
     private void BuildFontSizeMenu()
     {
         FontSizeMenu.Items.Clear();
-        AddFontSizeItem("跟随全局", null);
+        AddFontSizeItem(FontSizeMenu.Items, "跟随全局", null);
         foreach (var size in new[] { 14, 16, 18, 20, 24 })
         {
-            AddFontSizeItem($"{size}", size);
+            AddFontSizeItem(FontSizeMenu.Items, $"{size}", size);
         }
     }
 
-    private void AddFontSizeItem(string header, int? size)
+    private void BuildFontSizeQuickMenu()
+    {
+        _fontSizeQuickMenu.Items.Clear();
+        AddFontSizeItem(_fontSizeQuickMenu.Items, "跟随全局", null);
+        foreach (var size in new[] { 14, 16, 18, 20, 24 })
+        {
+            AddFontSizeItem(_fontSizeQuickMenu.Items, $"{size}", size);
+        }
+    }
+
+    private void AddFontSizeItem(ItemCollection target, string header, int? size)
     {
         var item = new MenuItem { Header = header };
-        item.Click += async (_, _) =>
+        item.Click += async (_, _) => await ChangeFontSizeAsync(size);
+        target.Add(item);
+    }
+
+    private async Task ChangeFontSizeAsync(int? size)
+    {
+        try
         {
-            try
-            {
-                _session.ChangeAppearance(_session.ColorMode, _session.ColorHex, size);
-                await SaveAsync();
-                await ApplySessionStateAsync();
-            }
-            catch (Exception exception)
-            {
-                _host.Log.TryWrite("ERROR", "note_window", "font size change failed", exception.GetType().Name);
-            }
-        };
-        FontSizeMenu.Items.Add(item);
+            _session.ChangeAppearance(_session.ColorMode, _session.ColorHex, size);
+            await SaveAsync();
+            await ApplySessionStateAsync();
+        }
+        catch (Exception exception)
+        {
+            _host.Log.TryWrite("ERROR", "note_window", "font size change failed", exception.GetType().Name);
+        }
     }
 
     protected override void OnSourceInitialized(EventArgs e)
