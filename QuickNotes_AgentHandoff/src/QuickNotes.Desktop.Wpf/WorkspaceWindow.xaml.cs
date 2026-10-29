@@ -53,6 +53,7 @@ public partial class WorkspaceWindow : Window
             }
 
             await ShowBackupSetupIfNeededAsync();
+            await UpdateBackupStatusAsync();
         }
         catch (Exception exception)
         {
@@ -348,7 +349,7 @@ public partial class WorkspaceWindow : Window
         }
     }
 
-    private void BackupButton_Click(object sender, RoutedEventArgs e)
+    private async void BackupButton_Click(object sender, RoutedEventArgs e)
     {
         if (_restoreFrozen)
         {
@@ -371,6 +372,7 @@ public partial class WorkspaceWindow : Window
             Owner = this
         };
         window.ShowDialog();
+        await UpdateBackupStatusAsync();
     }
 
     private async Task ShowBackupSetupIfNeededAsync()
@@ -395,11 +397,34 @@ public partial class WorkspaceWindow : Window
             {
                 Owner = this
             };
+            window.Closed += async (_, _) => await UpdateBackupStatusAsync();
             window.Show();
         }
         catch (Exception exception)
         {
             _host.Log.TryWrite("WARN", "workspace", "backup setup could not be opened", exception.GetType().Name);
+        }
+    }
+
+    private async Task UpdateBackupStatusAsync()
+    {
+        if (_host.BackupServices is null)
+        {
+            BackupStatusText.Text = string.Empty;
+            return;
+        }
+
+        try
+        {
+            var status = await _host.BackupServices.Host.GetStatusAsync();
+            BackupStatusText.Text = status.AutoBackupConfigured
+                ? "自动备份已启用"
+                : "备份未配置";
+        }
+        catch (Exception exception)
+        {
+            _host.Log.TryWrite("WARN", "workspace", "backup status could not be read", exception.GetType().Name);
+            BackupStatusText.Text = "备份状态未知";
         }
     }
 

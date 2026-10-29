@@ -25,6 +25,10 @@
             <Button x:Name="RefreshButton" Content="刷新" Padding="14,6" Margin="0,0,8,0" Click="RefreshButton_Click" />
             <Button x:Name="DraftsButton" Content="草稿恢复" Padding="14,6" Margin="0,0,8,0" Click="DraftsButton_Click" />
             <Button x:Name="BackupButton" Content="备份与恢复" Padding="14,6" Click="BackupButton_Click" />
+            <TextBlock x:Name="BackupStatusText"
+                       Margin="16,0,0,0"
+                       VerticalAlignment="Center"
+                       Foreground="#666666" />
         </StackPanel>
 
         <Grid Grid.Row="1">

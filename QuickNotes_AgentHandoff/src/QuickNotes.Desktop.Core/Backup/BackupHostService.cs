@@ -77,10 +77,7 @@ public sealed class BackupHostService : IAsyncDisposable
         string? directory,
         CancellationToken cancellationToken = default)
     {
-        if (!await _operationGate.WaitAsync(0, cancellationToken).ConfigureAwait(false))
-        {
-            return Busy();
-        }
+        await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
         try
         {
