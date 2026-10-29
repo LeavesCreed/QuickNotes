@@ -1,6 +1,7 @@
 using System.Windows;
 using QuickNotes.Application;
 using QuickNotes.Desktop.Hosting;
+using QuickNotes.Desktop.Hotkeys;
 using QuickNotes.Domain;
 
 namespace QuickNotes.Desktop.Wpf;
@@ -51,6 +52,12 @@ public partial class SettingsWindow : Window
                 && device.Settings?.BackupDirectory is { } directory
                 ? directory
                 : "未配置";
+            var hotkeys = device.Status == DeviceSettingsReadResultStatus.Found
+                ? device.Settings?.Hotkeys ?? HotkeySettings.Default
+                : HotkeySettings.Default;
+            NewHotkeyBox.Text = hotkeys.NewNote ?? string.Empty;
+            ManagementHotkeyBox.Text = hotkeys.OpenManagementCenter ?? string.Empty;
+            ToggleHotkeyBox.Text = hotkeys.ToggleGlobalHidden ?? string.Empty;
         }
         catch (Exception exception)
         {
@@ -84,6 +91,11 @@ public partial class SettingsWindow : Window
                 UpdatedAtUtc = DateTimeOffset.UtcNow
             };
             updated.Validate();
+            if (!TryReadHotkeys(out var hotkeys))
+            {
+                return;
+            }
+
             var startupEnabled = StartupCheckBox.IsChecked == true;
             var startup = _host.StartupRegistration;
             if (startup is not null)
@@ -96,18 +108,19 @@ public partial class SettingsWindow : Window
                         : $"开机启动注册失败：{registration.ErrorCode}";
                     return;
                 }
+            }
 
-                if (_host.DeviceSettings is { } deviceStore)
+            if (_host.DeviceSettings is { } deviceStore)
+            {
+                var device = await deviceStore.ReadAsync();
+                var currentDevice = device.Status == DeviceSettingsReadResultStatus.Found
+                    ? device.Settings!
+                    : new DeviceSettings();
+                await deviceStore.WriteAsync(currentDevice with
                 {
-                    var device = await deviceStore.ReadAsync();
-                    var currentDevice = device.Status == DeviceSettingsReadResultStatus.Found
-                        ? device.Settings!
-                        : new DeviceSettings();
-                    await deviceStore.WriteAsync(currentDevice with
-                    {
-                        StartupRegistrationEnabled = startupEnabled
-                    });
-                }
+                    StartupRegistrationEnabled = startupEnabled,
+                    Hotkeys = hotkeys
+                });
             }
 
             await _host.EditingServices.Settings.UpdateAsync(updated, current.Version);
@@ -127,6 +140,49 @@ public partial class SettingsWindow : Window
                 _host.Log.TryWrite("ERROR", "settings", "settings save failed", exception.GetType().Name);
             }
         }
+    }
+
+    private bool TryReadHotkeys(out HotkeySettings hotkeys)
+    {
+        hotkeys = new HotkeySettings();
+        var values = new[]
+        {
+            (Name: "新建便签", Text: NewHotkeyBox.Text),
+            (Name: "管理中心", Text: ManagementHotkeyBox.Text),
+            (Name: "全局隐藏/恢复", Text: ToggleHotkeyBox.Text)
+        };
+        var parsed = new List<(string Name, string? Gesture)>();
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, text) in values)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                parsed.Add((name, null));
+                continue;
+            }
+
+            if (!HotkeyGesture.TryParse(text, out var gesture, out var error))
+            {
+                ErrorText.Text = $"{name}快捷键无效：{error}";
+                return false;
+            }
+
+            if (!used.Add(gesture!.Display))
+            {
+                ErrorText.Text = $"{name}快捷键与其他快捷键重复。";
+                return false;
+            }
+
+            parsed.Add((name, gesture.Display));
+        }
+
+        hotkeys = new HotkeySettings
+        {
+            NewNote = parsed[0].Gesture,
+            OpenManagementCenter = parsed[1].Gesture,
+            ToggleGlobalHidden = parsed[2].Gesture
+        };
+        return true;
     }
 
     private async void BackupSettingsButton_Click(object sender, RoutedEventArgs e)

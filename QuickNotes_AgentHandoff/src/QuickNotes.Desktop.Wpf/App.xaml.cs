@@ -2,7 +2,9 @@ using System.Reflection;
 using System.Windows;
 using Microsoft.Win32;
 using QuickNotes.Desktop.Hosting;
+using QuickNotes.Desktop.Hotkeys;
 using QuickNotes.Desktop.Startup;
+using QuickNotes.Domain;
 
 namespace QuickNotes.Desktop.Wpf;
 
@@ -13,6 +15,8 @@ public partial class App : System.Windows.Application
     private TrayIconService? _tray;
     private WorkspaceWindow? _workspace;
     private StartupRegistrationService? _startupRegistration;
+    private GlobalHotkeyService? _hotkeyService;
+    private GlobalHotkeyRegistrationManager? _hotkeyManager;
     private bool _exiting;
     private bool _startOnLogin;
 
@@ -92,7 +96,23 @@ public partial class App : System.Windows.Application
                     _workspace.Hide();
                 }
 
+                try
+                {
+                    _hotkeyService = new GlobalHotkeyService();
+                    _hotkeyManager = new GlobalHotkeyRegistrationManager(_hotkeyService);
+                    _hotkeyService.Pressed += OnHotkeyPressed;
+                }
+                catch (Exception exception)
+                {
+                    _host.Log.TryWrite(
+                        "ERROR",
+                        "hotkeys",
+                        "hotkey service could not be created",
+                        exception.GetType().Name);
+                }
+
                 await UpdateTrayStateAsync();
+                await ApplyHotkeysAsync(showErrors: true);
                 return;
             }
 
@@ -220,6 +240,65 @@ public partial class App : System.Windows.Application
         {
             await _noteWindows.RefreshAsync();
         }
+
+        await ApplyHotkeysAsync(showErrors: true);
+    }
+
+    private async Task ApplyHotkeysAsync(bool showErrors)
+    {
+        if (_hotkeyService is null || _hotkeyManager is null || _host?.DeviceSettings is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var device = await _host.DeviceSettings.ReadAsync();
+            var settings = device.Status == QuickNotes.Application.DeviceSettingsReadResultStatus.Found
+                ? device.Settings?.Hotkeys ?? HotkeySettings.Default
+                : HotkeySettings.Default;
+            var results = _hotkeyManager.Apply(settings);
+            var failures = results.Where(result => result.ErrorCode is not null).ToArray();
+            if (failures.Length == 0)
+            {
+                return;
+            }
+
+            var message = string.Join(
+                Environment.NewLine,
+                failures.Select(result => $"{result.Action}: {result.ErrorCode}"));
+            _host.Log.TryWrite("WARN", "hotkeys", "hotkey registration failed", message);
+            if (showErrors)
+            {
+                var owner = _workspace is { IsVisible: true } ? _workspace : null;
+                MessageBox.Show(
+                    owner,
+                    "以下全局快捷键未启用（可能与其他程序冲突）：" + Environment.NewLine + message,
+                    "QuickNotes",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+        }
+        catch (Exception exception)
+        {
+            _host.Log.TryWrite("WARN", "hotkeys", "hotkey apply failed", exception.GetType().Name);
+        }
+    }
+
+    private void OnHotkeyPressed(object? sender, GlobalHotkeyAction action)
+    {
+        switch (action)
+        {
+            case GlobalHotkeyAction.NewNote:
+                _ = CreateNoteFromTrayAsync();
+                break;
+            case GlobalHotkeyAction.OpenManagementCenter:
+                ShowWorkspace();
+                break;
+            case GlobalHotkeyAction.ToggleGlobalHidden:
+                _ = ToggleGlobalHiddenAsync();
+                break;
+        }
     }
 
     private async void OnActivationRequested()
@@ -312,6 +391,8 @@ public partial class App : System.Windows.Application
 
             _tray?.Dispose();
             _tray = null;
+            _hotkeyService?.Dispose();
+            _hotkeyService = null;
             _host?.Dispose();
             _host = null;
         }
@@ -334,6 +415,8 @@ public partial class App : System.Windows.Application
             _noteWindows = null;
             _tray?.Dispose();
             _tray = null;
+            _hotkeyService?.Dispose();
+            _hotkeyService = null;
             _host?.Dispose();
             _host = null;
         }
