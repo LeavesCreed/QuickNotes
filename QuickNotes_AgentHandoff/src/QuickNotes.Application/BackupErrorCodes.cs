@@ -9,4 +9,5 @@ public static class BackupErrorCodes
     public const string PackageVerificationFailed = "package_verification_failed";
     public const string DestinationUnavailable = "destination_unavailable";
     public const string ManifestInvalid = "manifest_invalid";
+    public const string ChangeMarkerUnavailable = "change_marker_unavailable";
 }

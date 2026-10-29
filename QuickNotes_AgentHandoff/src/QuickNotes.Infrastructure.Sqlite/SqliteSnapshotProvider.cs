@@ -80,8 +80,7 @@ public sealed class SqliteSnapshotProvider : IBackupSnapshotProvider
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            var schemaVersion = await VerifySnapshotAsync(destinationDatabasePath, cancellationToken);
-            return new SnapshotInfo(schemaVersion);
+            return await VerifySnapshotAsync(destinationDatabasePath, cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -199,7 +198,7 @@ public sealed class SqliteSnapshotProvider : IBackupSnapshotProvider
         }
     }
 
-    private static async Task<long> VerifySnapshotAsync(
+    private static async Task<SnapshotInfo> VerifySnapshotAsync(
         string snapshotPath,
         CancellationToken cancellationToken)
     {
@@ -236,7 +235,10 @@ public sealed class SqliteSnapshotProvider : IBackupSnapshotProvider
                     $"The snapshot has unsupported schema version {schemaVersion}.");
             }
 
-            return schemaVersion;
+            var marker = schemaVersion >= 2
+                ? await ReadChangeMarkerAsync(connection, schemaVersion, cancellationToken)
+                : null;
+            return new SnapshotInfo(schemaVersion, marker);
         }
         catch (OperationCanceledException)
         {
@@ -263,6 +265,51 @@ public sealed class SqliteSnapshotProvider : IBackupSnapshotProvider
             FormatSqliteError("snapshot copy", exception),
             exception,
             IsBusy(exception));
+
+    private static async Task<DataChangeMarker> ReadChangeMarkerAsync(
+        SqliteConnection connection,
+        long schemaVersion,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT database_id, change_sequence
+                FROM database_meta
+                WHERE id = 1;
+                """;
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken))
+            {
+                throw new BackupException(
+                    "snapshot",
+                    BackupErrorCodes.ChangeMarkerUnavailable,
+                    "The snapshot has the current schema but no database_meta row.");
+            }
+
+            return new DataChangeMarker(
+                schemaVersion,
+                Guid.Parse(reader.GetString(0)),
+                reader.GetInt64(1));
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (BackupException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is SqliteException or FormatException or OverflowException)
+        {
+            throw new BackupException(
+                "snapshot",
+                BackupErrorCodes.ChangeMarkerUnavailable,
+                "The snapshot change marker is missing or invalid.",
+                exception);
+        }
+    }
 
     private static bool IsBusy(SqliteException exception)
     {

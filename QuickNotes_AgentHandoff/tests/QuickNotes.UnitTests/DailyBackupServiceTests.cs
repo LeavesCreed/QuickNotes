@@ -56,7 +56,8 @@ public sealed class DailyBackupServiceTests
         Assert.Equal(BackupType.Daily, backups.LastRequest!.Type);
         Assert.Equal(temporary.RootPath, backups.LastRequest.BackupDirectory);
         Assert.Equal(1, state.WriteCalls);
-        Assert.Equal("fp1", state.LastWritten!.LastSuccessfulFingerprint);
+        Assert.Equal(BackupTestData.Fingerprint(1), state.LastWritten!.LastSuccessfulFingerprint);
+        Assert.NotEqual("fp1", state.LastWritten.LastSuccessfulFingerprint);
         Assert.Equal(BackupTestData.UtcNow, state.LastWritten.LastSuccessfulDailyAtUtc);
         Assert.Equal(Today, state.LastWritten.LastSuccessfulDailyLocalDate);
         Assert.Equal(1, policy.Calls);
@@ -108,7 +109,7 @@ public sealed class DailyBackupServiceTests
             Yesterday);
         var detector = new FakeBackupChangeDetector
         {
-            Handler = _ => Task.FromResult("fp1")
+            Handler = _ => Task.FromResult(BackupTestData.Fingerprint(3))
         };
         var catalog = new FakeBackupCatalog
         {
@@ -119,7 +120,10 @@ public sealed class DailyBackupServiceTests
         var retention = new FakeBackupRetentionStore();
         var state = new FakeBackupStateStore
         {
-            State = NewState("fp1", prior.LocalDate, prior.Manifest.CreatedAtUtc)
+            State = NewState(
+                BackupTestData.Fingerprint(3),
+                prior.LocalDate,
+                prior.Manifest.CreatedAtUtc)
         };
         var service = CreateService(
             detector,
@@ -199,7 +203,201 @@ public sealed class DailyBackupServiceTests
 
         Assert.Equal(DailyBackupOutcome.BackedUp, result.Outcome);
         Assert.Equal(1, backups.Calls);
-        Assert.Equal("fp2", state.LastWritten!.LastSuccessfulFingerprint);
+        Assert.Equal(BackupTestData.Fingerprint(1), state.LastWritten!.LastSuccessfulFingerprint);
+    }
+
+    [Fact]
+    public async Task RunCheck_SuccessfulBackup_WritesSnapshotFingerprint_NotPreBackupFingerprint()
+    {
+        using var temporary = new UnitTemporaryDirectory();
+        var preBackupFingerprint = BackupTestData.Fingerprint(10);
+        var snapshotMarker = BackupTestData.Marker(12);
+        var detector = new FakeBackupChangeDetector
+        {
+            Handler = _ => Task.FromResult(preBackupFingerprint)
+        };
+        var backups = new FakeBackupCoordinator
+        {
+            Handler = (request, _) => Task.FromResult(
+                DailyBackupTestData.Success(request.BackupDirectory, snapshotMarker))
+        };
+        var state = new FakeBackupStateStore();
+        var service = CreateService(
+            detector,
+            new FakeBackupCatalog(),
+            backups,
+            new FakeBackupRetentionPolicy(),
+            new FakeBackupRetentionStore(),
+            state);
+
+        var result = await service.RunCheckAsync(temporary.RootPath);
+
+        Assert.Equal(DailyBackupOutcome.BackedUp, result.Outcome);
+        Assert.Null(result.StateWarning);
+        Assert.Equal(1, state.WriteCalls);
+        Assert.Equal(snapshotMarker.ToFingerprint(), state.LastWritten!.LastSuccessfulFingerprint);
+        Assert.NotEqual(preBackupFingerprint, state.LastWritten.LastSuccessfulFingerprint);
+    }
+
+    [Fact]
+    public async Task RunCheck_EditDuringSnapshot_DoesNotMarkNewEditAsBackedUp()
+    {
+        using var temporary = new UnitTemporaryDirectory();
+        var currentFingerprint = BackupTestData.Fingerprint(10);
+        var snapshotMarker = BackupTestData.Marker(12);
+        var detector = new FakeBackupChangeDetector
+        {
+            Handler = _ => Task.FromResult(currentFingerprint)
+        };
+        var backups = new FakeBackupCoordinator
+        {
+            Handler = (request, _) =>
+            {
+                // The user edits after the snapshot was taken but before the
+                // package is published: the live database moves to seq=13
+                // while the snapshot still carries seq=12.
+                currentFingerprint = BackupTestData.Fingerprint(13);
+                return Task.FromResult(
+                    DailyBackupTestData.Success(request.BackupDirectory, snapshotMarker));
+            }
+        };
+        var state = new FakeBackupStateStore();
+        var service = CreateService(
+            detector,
+            new FakeBackupCatalog(),
+            backups,
+            new FakeBackupRetentionPolicy(),
+            new FakeBackupRetentionStore(),
+            state);
+
+        var first = await service.RunCheckAsync(temporary.RootPath);
+
+        Assert.Equal(DailyBackupOutcome.BackedUp, first.Outcome);
+        Assert.Equal(
+            snapshotMarker.ToFingerprint(),
+            state.LastWritten!.LastSuccessfulFingerprint);
+        state.State = state.LastWritten;
+
+        // The baseline package from the first run still exists.
+        var baseline = DailyBackupTestData.DailyEntry(
+            Path.Combine(temporary.RootPath, "baseline.zip"),
+            Today,
+            BackupTestData.UtcNow);
+        var catalog = new FakeBackupCatalog
+        {
+            SchedulingHandler = _ => Task.FromResult(
+                DailyBackupTestData.Catalog(baseline))
+        };
+
+        // Next day the only difference is the edit made during the snapshot;
+        // it must not be treated as already backed up.
+        var nextDay = new DailyBackupService(
+            detector,
+            catalog,
+            backups,
+            new FakeBackupRetentionPolicy(),
+            new FakeBackupRetentionStore(),
+            state,
+            new FixedTimeProvider(
+                BackupTestData.UtcNow.AddDays(1),
+                BackupTestData.LocalZone));
+
+        var second = await nextDay.RunCheckAsync(temporary.RootPath);
+
+        Assert.Equal(DailyBackupOutcome.BackedUp, second.Outcome);
+        Assert.Equal(2, backups.Calls);
+    }
+
+    [Fact]
+    public async Task RunCheck_SnapshotMarkerMissing_DoesNotWriteStateAndWarns()
+    {
+        using var temporary = new UnitTemporaryDirectory();
+        var backups = new FakeBackupCoordinator
+        {
+            Handler = (request, _) => Task.FromResult(
+                DailyBackupTestData.Success(request.BackupDirectory, marker: null))
+        };
+        var retention = new FakeBackupRetentionStore();
+        var state = new FakeBackupStateStore();
+        var service = CreateService(
+            new FakeBackupChangeDetector(),
+            new FakeBackupCatalog(),
+            backups,
+            new FakeBackupRetentionPolicy(),
+            retention,
+            state);
+
+        var result = await service.RunCheckAsync(temporary.RootPath);
+
+        Assert.Equal(DailyBackupOutcome.BackedUp, result.Outcome);
+        Assert.NotNull(result.Backup);
+        Assert.Equal("snapshot_marker_missing", result.StateWarning);
+        Assert.Equal(0, state.WriteCalls);
+        Assert.Equal(1, retention.Calls);
+    }
+
+    [Fact]
+    public async Task RunCheck_CanceledDuringBackup_DoesNotWriteState()
+    {
+        using var temporary = new UnitTemporaryDirectory();
+        var backups = new FakeBackupCoordinator
+        {
+            Handler = (_, _) => throw new OperationCanceledException("canceled")
+        };
+        var retention = new FakeBackupRetentionStore();
+        var state = new FakeBackupStateStore();
+        var service = CreateService(
+            new FakeBackupChangeDetector(),
+            new FakeBackupCatalog(),
+            backups,
+            new FakeBackupRetentionPolicy(),
+            retention,
+            state);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => service.RunCheckAsync(temporary.RootPath));
+
+        Assert.Equal(0, state.WriteCalls);
+        Assert.Equal(0, retention.Calls);
+    }
+
+    [Fact]
+    public async Task RunCheck_LegacyHeuristicState_ForcesBackup()
+    {
+        using var temporary = new UnitTemporaryDirectory();
+        var prior = DailyBackupTestData.DailyEntry(
+            Path.Combine(temporary.RootPath, "prior.zip"),
+            Yesterday);
+        var catalog = new FakeBackupCatalog
+        {
+            SchedulingHandler = _ => Task.FromResult(
+                DailyBackupTestData.Catalog(prior))
+        };
+        var backups = new FakeBackupCoordinator();
+        var state = new FakeBackupStateStore
+        {
+            State = NewState(
+                "schema=1;notes=1;tags=0;max_modified=2026-10-27T09:00:00Z",
+                prior.LocalDate,
+                prior.Manifest.CreatedAtUtc)
+        };
+        var service = CreateService(
+            new FakeBackupChangeDetector(),
+            catalog,
+            backups,
+            new FakeBackupRetentionPolicy(),
+            new FakeBackupRetentionStore(),
+            state);
+
+        var result = await service.RunCheckAsync(temporary.RootPath);
+
+        Assert.Equal(DailyBackupOutcome.BackedUp, result.Outcome);
+        Assert.Equal(1, backups.Calls);
+        Assert.Equal(1, state.WriteCalls);
+        Assert.StartsWith(
+            "schema=2;db=",
+            state.LastWritten!.LastSuccessfulFingerprint,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -527,7 +725,8 @@ public sealed class DailyBackupServiceTests
         FakeBackupRetentionPolicy policy,
         FakeBackupRetentionStore retention,
         FakeBackupStateStore state,
-        ILogger<DailyBackupService>? logger = null)
+        ILogger<DailyBackupService>? logger = null,
+        TimeProvider? timeProvider = null)
     {
         return new DailyBackupService(
             detector,
@@ -536,10 +735,10 @@ public sealed class DailyBackupServiceTests
             policy,
             retention,
             state,
-            new FixedTimeProvider(BackupTestData.UtcNow, BackupTestData.LocalZone),
+            timeProvider
+                ?? new FixedTimeProvider(BackupTestData.UtcNow, BackupTestData.LocalZone),
             logger);
     }
-
     private static BackupScheduleState NewState(
         string fingerprint,
         DateOnly localDate,

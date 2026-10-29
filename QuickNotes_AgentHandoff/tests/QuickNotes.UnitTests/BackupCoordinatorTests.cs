@@ -32,6 +32,9 @@ public sealed class BackupCoordinatorTests
         Assert.Equal(BackupType.Manual, result.Manifest!.BackupType);
         Assert.Null(result.Error);
         Assert.True(result.DurationMilliseconds >= 0);
+        Assert.NotNull(result.Snapshot);
+        Assert.True(result.Snapshot!.HasChangeMarker);
+        Assert.Equal(2, result.Snapshot.SchemaVersion);
         Assert.Equal(1, snapshots.Calls);
         Assert.Equal(1, packages.Calls);
         Assert.Equal(2, packages.LastSchemaVersion);
@@ -50,6 +53,30 @@ public sealed class BackupCoordinatorTests
             Path.GetFileName(workingDirectory),
             StringComparison.Ordinal);
         Assert.False(Directory.Exists(workingDirectory));
+    }
+
+    [Fact]
+    public async Task CreateAsync_Success_IncludesSnapshotChangeMarker()
+    {
+        using var temporary = new UnitTemporaryDirectory();
+        var marker = new DataChangeMarker(2, Guid.NewGuid(), 7);
+        var snapshots = new FakeBackupSnapshotProvider
+        {
+            Handler = (path, _) =>
+            {
+                File.WriteAllText(path, "snapshot");
+                return Task.FromResult(new SnapshotInfo(marker));
+            }
+        };
+        var coordinator = CreateCoordinator(snapshots, new FakeBackupPackageStore());
+
+        var result = await coordinator.CreateAsync(
+            new BackupRequest { BackupDirectory = temporary.RootPath });
+
+        Assert.Equal(BackupStatus.Succeeded, result.Status);
+        Assert.NotNull(result.Snapshot);
+        Assert.Equal(marker, result.Snapshot!.Marker);
+        Assert.Equal(marker.ToFingerprint(), result.Snapshot.ToFingerprint());
     }
 
     [Fact]
@@ -177,6 +204,7 @@ public sealed class BackupCoordinatorTests
             Assert.Equal(expectedCode, result.Error!.Code);
             Assert.Equal(expectedRetryable, result.Error.IsRetryable);
             Assert.Null(result.PackagePath);
+            Assert.Null(result.Snapshot);
             Assert.Equal(0, packages.Calls);
         }
     }
@@ -237,6 +265,7 @@ public sealed class BackupCoordinatorTests
             Assert.Equal(expectedCode, result.Error!.Code);
             Assert.Equal(expectedRetryable, result.Error.IsRetryable);
             Assert.Null(result.PackagePath);
+            Assert.Null(result.Snapshot);
             Assert.Equal(1, snapshots.Calls);
         }
     }
@@ -271,7 +300,7 @@ public sealed class BackupCoordinatorTests
             {
                 File.WriteAllText(path, "snapshot");
                 cancellation.Cancel();
-                return Task.FromResult(new SnapshotInfo(1));
+                return Task.FromResult(new SnapshotInfo(1, null));
             }
         };
         var packages = new FakeBackupPackageStore();

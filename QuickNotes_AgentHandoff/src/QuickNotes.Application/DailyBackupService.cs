@@ -178,27 +178,40 @@ public sealed class DailyBackupService : IDailyBackupService
             }
 
             string? stateWarning = null;
-            try
+            var baselineFingerprint = backup.Snapshot?.ToFingerprint();
+            if (baselineFingerprint is null)
             {
-                await _stateStore.WriteAsync(
-                        backupDirectory,
-                        new BackupScheduleState
-                        {
-                            FormatVersion = BackupScheduleState.CurrentFormatVersion,
-                            LastSuccessfulFingerprint = fingerprint,
-                            LastSuccessfulDailyAtUtc = backup.Manifest.CreatedAtUtc,
-                            LastSuccessfulDailyLocalDate = DateOnly.FromDateTime(
-                                backup.Manifest.CreatedAtLocal.DateTime)
-                        },
-                        cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (BackupException exception)
-            {
-                stateWarning = $"state_write_failed:{exception.ErrorCode}";
+                // The backup package itself is valid but carries no marker
+                // (e.g. a schema v1 snapshot). Advancing the baseline would
+                // risk skipping later changes, so leave the state untouched.
+                stateWarning = "snapshot_marker_missing";
                 _logger.LogWarning(
-                    "Daily backup succeeded but the schedule state could not be written: {ErrorCode}.",
-                    exception.ErrorCode);
+                    "Daily backup succeeded but the snapshot has no change marker; the schedule baseline was not advanced.");
+            }
+            else
+            {
+                try
+                {
+                    await _stateStore.WriteAsync(
+                            backupDirectory,
+                            new BackupScheduleState
+                            {
+                                FormatVersion = BackupScheduleState.CurrentFormatVersion,
+                                LastSuccessfulFingerprint = baselineFingerprint,
+                                LastSuccessfulDailyAtUtc = backup.Manifest.CreatedAtUtc,
+                                LastSuccessfulDailyLocalDate = DateOnly.FromDateTime(
+                                    backup.Manifest.CreatedAtLocal.DateTime)
+                            },
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (BackupException exception)
+                {
+                    stateWarning = $"state_write_failed:{exception.ErrorCode}";
+                    _logger.LogWarning(
+                        "Daily backup succeeded but the schedule state could not be written: {ErrorCode}.",
+                        exception.ErrorCode);
+                }
             }
 
             BackupRetentionResult retention;

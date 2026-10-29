@@ -90,6 +90,7 @@ public sealed class BackupCoordinator : IBackupCoordinator
                 Status = BackupStatus.Succeeded,
                 PackagePath = package.PackagePath,
                 Manifest = package.Manifest,
+                Snapshot = snapshot,
                 DurationMilliseconds = duration
             };
         }
@@ -173,6 +174,8 @@ public sealed class BackupCoordinator : IBackupCoordinator
             BackupErrorCodes.SnapshotFailed =>
                 (BackupStatus.SnapshotFailed, BackupErrorCode.SnapshotFailed, exception.IsRetryable),
             BackupErrorCodes.SnapshotVerificationFailed =>
+                (BackupStatus.VerificationFailed, BackupErrorCode.SnapshotVerificationFailed, false),
+            BackupErrorCodes.ChangeMarkerUnavailable =>
                 (BackupStatus.VerificationFailed, BackupErrorCode.SnapshotVerificationFailed, false),
             BackupErrorCodes.PackageWriteFailed =>
                 (BackupStatus.StorageUnavailable, BackupErrorCode.PackageWriteFailed, exception.IsRetryable),

@@ -203,6 +203,81 @@ public sealed class DailyBackupServiceIntegrationTests
     }
 
     [Fact]
+    public async Task RunCheck_LegacyHeuristicStateFingerprint_ForcesBackup()
+    {
+        using var database = await TestDatabase.CreateAsync();
+        await database.Notes.CreateAsync(TestData.NewNote(), Array.Empty<Guid>());
+        using var temporary = new TemporaryDirectory();
+        var backupDirectory = CreateBackupDirectory(temporary);
+        var snapshotPath = Path.Combine(temporary.RootPath, "seed-snapshot.db");
+        await new SqliteSnapshotProvider(database.DatabasePath).CreateAsync(snapshotPath);
+        var priorAtUtc = StartUtc.AddDays(-1);
+        await PublishPackageAsync(
+            snapshotPath,
+            backupDirectory,
+            BackupType.Daily,
+            priorAtUtc);
+        var stateStore = new FileBackupStateStore();
+        await stateStore.WriteAsync(backupDirectory, new BackupScheduleState
+        {
+            FormatVersion = BackupScheduleState.CurrentFormatVersion,
+            LastSuccessfulFingerprint = "schema=1;notes=1;tags=0",
+            LastSuccessfulDailyAtUtc = priorAtUtc,
+            LastSuccessfulDailyLocalDate = DateOnly.FromDateTime(
+                priorAtUtc.ToOffset(TimeSpan.FromHours(8)).DateTime)
+        });
+        var time = new MutableTimeProvider(StartUtc, LocalZone);
+        var service = CreateService(database.DatabasePath, backupDirectory, time);
+
+        var result = await service.RunCheckAsync(backupDirectory);
+
+        Assert.Equal(DailyBackupOutcome.BackedUp, result.Outcome);
+        var state = await stateStore.ReadAsync(backupDirectory);
+        Assert.StartsWith(
+            "schema=2;db=",
+            state!.LastSuccessfulFingerprint,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RunCheck_UnknownStateFormatVersion_TreatsStateAsMissingAndBacksUp()
+    {
+        using var database = await TestDatabase.CreateAsync();
+        await database.Notes.CreateAsync(TestData.NewNote(), Array.Empty<Guid>());
+        using var temporary = new TemporaryDirectory();
+        var backupDirectory = CreateBackupDirectory(temporary);
+        var snapshotPath = Path.Combine(temporary.RootPath, "seed-snapshot.db");
+        await new SqliteSnapshotProvider(database.DatabasePath).CreateAsync(snapshotPath);
+        var priorAtUtc = StartUtc.AddDays(-1);
+        await PublishPackageAsync(
+            snapshotPath,
+            backupDirectory,
+            BackupType.Daily,
+            priorAtUtc);
+        var currentFingerprint = await new SqliteChangeDetector(database.DatabasePath)
+            .GetFingerprintAsync();
+        await File.WriteAllTextAsync(
+            StatePath(backupDirectory),
+            $$"""
+            {
+              "formatVersion": 99,
+              "lastSuccessfulFingerprint": "{{currentFingerprint}}",
+              "lastSuccessfulDailyAtUtc": "{{priorAtUtc:O}}",
+              "lastSuccessfulDailyLocalDate": "2026-10-27"
+            }
+            """);
+        var time = new MutableTimeProvider(StartUtc, LocalZone);
+        var service = CreateService(database.DatabasePath, backupDirectory, time);
+
+        var result = await service.RunCheckAsync(backupDirectory);
+
+        Assert.Equal(DailyBackupOutcome.BackedUp, result.Outcome);
+        var state = await new FileBackupStateStore().ReadAsync(backupDirectory);
+        Assert.NotNull(state);
+        Assert.Equal(BackupScheduleState.CurrentFormatVersion, state!.FormatVersion);
+    }
+
+    [Fact]
     public async Task RunCheck_Cancelled_DoesNotCreatePackageOrState()
     {
         using var database = await TestDatabase.CreateAsync();

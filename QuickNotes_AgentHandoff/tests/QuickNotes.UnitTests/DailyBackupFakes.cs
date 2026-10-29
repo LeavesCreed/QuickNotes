@@ -177,15 +177,27 @@ internal static class DailyBackupTestData
         };
     }
 
-    public static BackupResult Success(string backupDirectory) => new()
+    public static BackupResult Success(string backupDirectory) =>
+        Success(backupDirectory, BackupTestData.Marker(1));
+
+    public static BackupResult Success(
+        string backupDirectory,
+        DataChangeMarker? marker)
     {
-        Status = BackupStatus.Succeeded,
-        PackagePath = Path.Combine(backupDirectory, "daily.zip"),
-        Manifest = BackupTestData.Manifest(
+        var manifest = BackupTestData.Manifest(
             BackupType.Daily,
             BackupTestData.UtcNow,
             BackupTestData.UtcNow.ToOffset(TimeSpan.FromHours(8)),
-            1),
-        DurationMilliseconds = 1
-    };
+            2);
+        return new BackupResult
+        {
+            Status = BackupStatus.Succeeded,
+            PackagePath = Path.Combine(backupDirectory, "daily.zip"),
+            Manifest = manifest,
+            Snapshot = marker is null
+                ? null
+                : new SnapshotInfo(manifest.SchemaVersion, marker),
+            DurationMilliseconds = 1
+        };
+    }
 }

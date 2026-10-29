@@ -37,6 +37,9 @@ public sealed class SqliteSnapshotProviderTests
         var info = await provider.CreateAsync(snapshotPath);
 
         Assert.Equal(2, info.SchemaVersion);
+        Assert.True(info.HasChangeMarker);
+        Assert.NotNull(info.Marker);
+        Assert.Equal(2, info.Marker!.SchemaVersion);
         Assert.True(File.Exists(snapshotPath));
         Assert.False(File.Exists(snapshotPath + "-wal"));
         Assert.False(File.Exists(snapshotPath + "-shm"));
@@ -200,6 +203,103 @@ public sealed class SqliteSnapshotProviderTests
 
         Assert.Equal(BackupErrorCodes.SnapshotVerificationFailed, exception.ErrorCode);
         Assert.False(File.Exists(snapshotPath));
+    }
+
+    [Fact]
+    public async Task CreateAsync_SchemaTwo_ReturnsChangeMarkerFromSnapshot()
+    {
+        using var database = await TestDatabase.CreateAsync();
+        var (databaseId, changeSequence) = await ReadMetaAsync(database.DatabasePath);
+        using var temporary = new TemporaryDirectory();
+        var snapshotPath = Path.Combine(temporary.RootPath, "snapshot.db");
+        var provider = new SqliteSnapshotProvider(database.DatabasePath);
+
+        var info = await provider.CreateAsync(snapshotPath);
+
+        var expected = new DataChangeMarker(2, databaseId, changeSequence);
+        Assert.Equal(2, info.SchemaVersion);
+        Assert.Equal(expected, info.Marker);
+        Assert.Equal(expected.ToFingerprint(), info.ToFingerprint());
+        var snapshotMeta = await ReadMetaAsync(snapshotPath);
+        Assert.Equal((databaseId, changeSequence), snapshotMeta);
+    }
+
+    [Fact]
+    public async Task CreateAsync_SchemaTwoWithoutDatabaseMeta_ThrowsChangeMarkerUnavailable()
+    {
+        using var database = await TestDatabase.CreateAsync();
+        using var temporary = new TemporaryDirectory();
+        var snapshotPath = Path.Combine(temporary.RootPath, "snapshot.db");
+        await ExecuteAsync(database.DatabasePath, "DROP TABLE database_meta;");
+        var provider = new SqliteSnapshotProvider(database.DatabasePath);
+
+        var exception = await Assert.ThrowsAsync<BackupException>(
+            () => provider.CreateAsync(snapshotPath));
+
+        Assert.Equal(BackupErrorCodes.ChangeMarkerUnavailable, exception.ErrorCode);
+        Assert.Equal("snapshot", exception.Operation);
+        Assert.False(File.Exists(snapshotPath));
+    }
+
+    [Fact]
+    public async Task CreateAsync_SchemaTwoWithoutDatabaseMetaRow_ThrowsChangeMarkerUnavailable()
+    {
+        using var database = await TestDatabase.CreateAsync();
+        using var temporary = new TemporaryDirectory();
+        var snapshotPath = Path.Combine(temporary.RootPath, "snapshot.db");
+        await ExecuteAsync(database.DatabasePath, "DELETE FROM database_meta;");
+        var provider = new SqliteSnapshotProvider(database.DatabasePath);
+
+        var exception = await Assert.ThrowsAsync<BackupException>(
+            () => provider.CreateAsync(snapshotPath));
+
+        Assert.Equal(BackupErrorCodes.ChangeMarkerUnavailable, exception.ErrorCode);
+        Assert.False(File.Exists(snapshotPath));
+    }
+
+    [Fact]
+    public async Task CreateAsync_SchemaOneProtectionSnapshot_ReturnsNoChangeMarker()
+    {
+        using var temporary = new TemporaryDirectory();
+        var sourcePath = Path.Combine(temporary.RootPath, "v1.db");
+        var snapshotPath = Path.Combine(temporary.RootPath, "snapshot.db");
+        await TestDatabase.CreateVersionOneAsync(sourcePath);
+        var provider = new SqliteSnapshotProvider(sourcePath);
+
+        var info = await provider.CreateAsync(snapshotPath);
+
+        Assert.Equal(1, info.SchemaVersion);
+        Assert.Null(info.Marker);
+        Assert.False(info.HasChangeMarker);
+        Assert.Null(info.ToFingerprint());
+        await AssertSnapshotValidAsync(snapshotPath, 1);
+    }
+
+    private static async Task<(Guid DatabaseId, long ChangeSequence)> ReadMetaAsync(
+        string databasePath)
+    {
+        await using var connection = new SqliteConnection(
+            $"Data Source={databasePath};Mode=ReadOnly;Pooling=False");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT database_id, change_sequence
+            FROM database_meta
+            WHERE id = 1;
+            """;
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return (Guid.Parse(reader.GetString(0)), reader.GetInt64(1));
+    }
+
+    private static async Task ExecuteAsync(string databasePath, string sql)
+    {
+        await using var connection = new SqliteConnection(
+            $"Data Source={databasePath};Mode=ReadWrite;Pooling=False");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        await command.ExecuteNonQueryAsync();
     }
 
     private static async Task CreateEmptyDatabaseAsync(string path)

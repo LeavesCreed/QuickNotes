@@ -8,7 +8,8 @@ internal sealed class FakeBackupSnapshotProvider : IBackupSnapshotProvider
         static (path, _) =>
         {
             File.WriteAllText(path, "snapshot");
-            return Task.FromResult(new SnapshotInfo(2));
+            return Task.FromResult(
+                new SnapshotInfo(2, BackupTestData.Marker(1)));
         };
 
     public int Calls { get; private set; }
@@ -85,6 +86,15 @@ internal static class BackupTestData
 {
     public static readonly DateTimeOffset UtcNow =
         new(2026, 10, 28, 9, 30, 0, TimeSpan.Zero);
+
+    public static readonly Guid DatabaseId =
+        Guid.Parse("0f8fad5b-d9cb-469f-a165-70867728950e");
+
+    public static DataChangeMarker Marker(long changeSequence) =>
+        new(2, DatabaseId, changeSequence);
+
+    public static string Fingerprint(long changeSequence) =>
+        Marker(changeSequence).ToFingerprint();
 
     public static readonly TimeZoneInfo LocalZone =
         TimeZoneInfo.CreateCustomTimeZone(
