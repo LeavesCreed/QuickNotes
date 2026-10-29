@@ -1,4 +1,5 @@
 using System.Windows;
+using Microsoft.Win32;
 using QuickNotes.Desktop.Hosting;
 
 namespace QuickNotes.Desktop.Wpf;
@@ -34,6 +35,7 @@ public partial class App : System.Windows.Application
 
         _host = new DesktopApplicationHost(options);
         _host.RestoreApplied += OnRestoreApplied;
+        SystemEvents.PowerModeChanged += OnPowerModeChanged;
         try
         {
             var result = await _host.StartAsync();
@@ -123,6 +125,7 @@ public partial class App : System.Windows.Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        SystemEvents.PowerModeChanged -= OnPowerModeChanged;
         try
         {
             _host?.Dispose();
@@ -132,6 +135,23 @@ public partial class App : System.Windows.Application
         }
 
         base.OnExit(e);
+    }
+
+    private async void OnPowerModeChanged(object sender, PowerModeChangedEventArgs e)
+    {
+        if (e.Mode != PowerModes.Resume || _host?.BackupServices is not { } services)
+        {
+            return;
+        }
+
+        try
+        {
+            await services.Host.TriggerWakeCheckAsync();
+        }
+        catch (Exception exception)
+        {
+            _host.Log.TryWrite("WARN", "backup_host", "wake backup check failed", exception.GetType().Name);
+        }
     }
 
     private void TryLog(string eventName, string message, string errorCode)
