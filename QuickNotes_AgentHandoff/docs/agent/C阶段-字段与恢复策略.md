@@ -1,7 +1,7 @@
 # C 阶段字段与恢复策略
 
 **日期：** 2026-10-28\
-**状态：** 随 C3 Task 1 建立；schema、仓储、迁移与恢复实现证据由 C3 Task 2–8 补齐\
+**状态：** schema v2、仓储、迁移、快照基线、恢复兼容与草稿 v2 已实现；自动化测试见 [C3 测试报告](C3-测试报告.md)\
 **范围：** schema v2 字段归属、版本/并发、是否进入备份、恢复行为、跨设备映射与默认值\
 **相关：** [PRD v1.0](../product/PRD_v1.0.md) 4.1–4.4、5.1–5.3、9、10.1–10.3、11.1、11.5–11.8、13.4、14.1、15.2、17.1–17.2、20；[C3 对接文档](Agent对接文档_C阶段.md) 第 C3 节；[C 阶段 PRD 覆盖表](C阶段-PRD覆盖表.md)；[C3 字段策略 ADR](../decisions/2026-10-28-c3-schema-v2-field-strategy.md)、[C3 迁移与恢复兼容 ADR](../decisions/2026-10-28-c3-migration-and-restore-compatibility.md)、[C3 变更标识与快照基线 ADR](../decisions/2026-10-28-c3-change-marker-and-snapshot-baseline.md)
 
@@ -11,7 +11,7 @@
 
 - 本文落实 C3“建立字段策略表”的要求，作为 schema v2、备份/恢复、C4/C5 接线的共同依据。
 - 本文不替代 PRD。字段行为与 PRD 冲突时以 PRD 为准，先报告冲突或写 ADR 草案，不把建议冒充决定。
-- **当前状态：** Task 1 只建立领域模型、校验规则、字段策略与本组 ADR。schema v2、仓储、设备设置文件、变更序号、迁移、恢复兼容与草稿 v2 尚未实现（C3 Task 2–7），不得把本文当作 schema 已落地的证据。
+- **当前状态：** schema v2、仓储、应用设置/设备设置、变更序号、迁移、v1 备份恢复兼容与草稿 v2 已实现（C3 Task 2–7），自动化与 WPF 冒烟证据见 [C3 测试报告](C3-测试报告.md)。C4/C5 的备份管理 UI、设置页、托盘与多屏行为仍未实现。
 - 只有实际运行过的测试才记录为通过；未运行的迁移/恢复验证在本文明示。
 
 ## 2. 字段策略表
@@ -52,7 +52,7 @@
 - ZIP 条目仍严格为 `manifest.json` + `notes.db`，不因 schema 升级新增条目。
 - 迁移保护快照是原始 DB 文件，不是备份包；不得被备份目录扫描/留存当作备份包。
 - 恢复哈希语义：先按原 manifest 验证包内原始库，再校验迁移后的目标库并记录目标校验值；切换后按目标校验值核对，不得拿迁移后的库直接比原包哈希。
-- 上表是设计矩阵；C3 Task 4–6 实现并以测试证明。Task 1 未运行迁移/恢复测试。
+- 上表是当前实现矩阵；C3 Task 4–6 已以自动化测试证明成功/失败/未来版本/目标哈希路径，结果见 [C3 测试报告](C3-测试报告.md)。
 
 ## 4. 候选值状态
 
@@ -92,9 +92,14 @@
 
 | 项目 | 状态 |
 |---|---|
-| 领域模型 `Note` 外观/布局字段、`NoteColorMode`、`NoteWindowLayout`、`NoteRules` | Task 1 已完成 |
-| `ApplicationSettings`、`TopBarAction`/`TopBarConfig`、`HotkeySettings`、`DeviceSettings` | Task 1 已完成 |
-| 本文字段策略表、版本兼容矩阵、三份 ADR | Task 1 已完成 |
-| `NoteRulesTests` | 11/11 通过（2026-10-28，本 worktree） |
-| schema v2、仓储、设备设置存储 | C3 Task 2，未实现 |
-| 变更序号/确定性指纹、迁移、快照基线、恢复兼容、草稿 v2 | C3 Task 3–7，未实现/未运行 |
+| 领域模型 `Note` 外观/布局字段、`NoteColorMode`、`NoteWindowLayout`、`NoteRules` | 已完成 |
+| `ApplicationSettings`、`TopBarAction`/`TopBarConfig`、`HotkeySettings`、`DeviceSettings` | 已完成 |
+| 本文字段策略表、版本兼容矩阵、三份 ADR | 已完成 |
+| schema v2、便签/设置仓储、设备设置文件 | 已完成；`SqliteSchemaTests`、`SqliteNoteRepositoryTests`、`SqliteApplicationSettingsRepositoryTests`、`FileDeviceSettingsStoreTests` |
+| 变更序号/确定性指纹、分类/标签写入 | 已完成；`SqliteChangeDetectorTests`、`SqliteCatalogRepositoryTests` |
+| v1→v2 迁移、保护快照、启动接线 | 已完成；`SqliteSchemaMigratorTests`、`SchemaMigrationServiceTests`、`StartupCoordinatorTests` |
+| 快照基线 | 已完成；`SqliteSnapshotProviderTests`、`DailyBackupServiceTests/IntegrationTests` |
+| v1/v2 恢复与缺失库重建兼容 | 已完成；`RestoreIntegrationTests`、`RestoreCoordinatorTests`、`MissingDatabaseRebuilderTests` |
+| 草稿 v2、编辑器外观/布局 | 已完成；`FileNoteDraftStoreTests`、`NoteEditorSession*Tests`、`EditorPersistenceIntegrationTests` |
+| C4/C5 接线（备份 UI、设置页、托盘、多屏） | 未实现 |
+| 真实强杀/卷满/ACL/性能/多屏 | 未运行（C5/C6） |
