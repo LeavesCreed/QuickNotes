@@ -32,11 +32,13 @@
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <TextBlock Text="合并目标：" VerticalAlignment="Center" />
             <ComboBox x:Name="MergeTargetCombo" Grid.Column="1" Margin="4,0,8,0" DisplayMemberPath="Name" />
             <Button Grid.Column="2" Content="合并选中" Padding="10,4" Margin="0,0,8,0" Click="MergeButton_Click" />
-            <Button Grid.Column="3" Content="删除选中/关闭" Padding="10,4" Click="DeleteButton_Click" />
+            <Button Grid.Column="3" Content="删除选中" Padding="10,4" Margin="0,0,8,0" Click="DeleteButton_Click" />
+            <Button Grid.Column="4" Content="关闭" Padding="10,4" Click="CloseButton_Click" />
         </Grid>
     </Grid>
 </Window>

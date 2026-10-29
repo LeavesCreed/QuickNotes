@@ -119,18 +119,16 @@ public partial class TagManagerWindow : Window
                 {
                     await _catalog.DeleteTagAsync(tag.Id);
                     await ReloadAsync();
-                    return;
                 }
                 catch (Exception exception)
                 {
                     ShowError(exception);
-                    return;
                 }
             }
         }
-
-        Close();
     }
+
+    private void CloseButton_Click(object sender, RoutedEventArgs e) => Close();
 
     private void ShowError(Exception exception) =>
         MessageBox.Show(this, exception.Message, "QuickNotes", MessageBoxButton.OK, MessageBoxImage.Warning);

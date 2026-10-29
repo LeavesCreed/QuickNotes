@@ -175,6 +175,7 @@ public partial class WorkspaceWindow : Window
                 await DisposeCurrentSessionAsync();
                 TitleBox.Text = string.Empty;
                 BodyBox.Text = string.Empty;
+                UpdateStatus();
             }
 
             UpdateSelectionText();
