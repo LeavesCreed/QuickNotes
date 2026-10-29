@@ -176,7 +176,17 @@ public sealed class NoteWindowManager : IAsyncDisposable
             }
 
             var shared = await _services.Sessions.GetOrOpenAsync(session.NoteId);
-            var window = new NoteWindow(_host, shared, _placement);
+            NoteWindow window;
+            try
+            {
+                window = new NoteWindow(_host, shared, _placement);
+            }
+            catch
+            {
+                await _services.Sessions.ReleaseAsync(session.NoteId);
+                throw;
+            }
+
             window.HideRequested += OnHideRequested;
             window.Closed += OnWindowClosed;
             window.ApplyPlacement(null, null, _windows.Count);

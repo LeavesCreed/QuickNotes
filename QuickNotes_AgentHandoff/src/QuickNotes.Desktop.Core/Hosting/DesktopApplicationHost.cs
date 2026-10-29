@@ -1,4 +1,4 @@
-using QuickNotes.Application;
+﻿using QuickNotes.Application;
 using QuickNotes.Desktop.Backup;
 using QuickNotes.Desktop.Diagnostics;
 using QuickNotes.Desktop.Editing;
@@ -149,7 +149,7 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
             _log,
             timeProvider: _timeProvider,
             initiallyBlocked: Assessment.State?.WritesBlocked == true);
-        RefreshEditingServices();
+        await RefreshEditingServicesAsync().ConfigureAwait(false);
         await RefreshBackupServicesAsync(cancellationToken).ConfigureAwait(false);
 
         return new DesktopStartResult
@@ -169,7 +169,7 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
             .StartAsync(cancellationToken)
             .ConfigureAwait(false);
         UpdateWriteGate();
-        RefreshEditingServices();
+        await RefreshEditingServicesAsync().ConfigureAwait(false);
         await RefreshBackupServicesAsync(cancellationToken).ConfigureAwait(false);
         return Assessment;
     }
@@ -182,7 +182,7 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
             .RetryInitializationAsync(cancellationToken)
             .ConfigureAwait(false);
         UpdateWriteGate();
-        RefreshEditingServices();
+        await RefreshEditingServicesAsync().ConfigureAwait(false);
         await RefreshBackupServicesAsync(cancellationToken).ConfigureAwait(false);
         return Assessment;
     }
@@ -207,7 +207,7 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
                 .StartAsync(cancellationToken)
                 .ConfigureAwait(false);
             UpdateWriteGate();
-            RefreshEditingServices();
+            await RefreshEditingServicesAsync().ConfigureAwait(false);
             await RefreshBackupServicesAsync(cancellationToken).ConfigureAwait(false);
         }
 
@@ -264,11 +264,6 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
             _log,
             timeProvider: _timeProvider,
             initiallyBlocked: Assessment?.State?.WritesBlocked == true);
-    }
-
-    private void RefreshEditingServices()
-    {
-        RefreshEditingServicesAsync().GetAwaiter().GetResult();
     }
 
     private async Task RefreshEditingServicesAsync()
@@ -395,7 +390,7 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
             .StartAsync(cancellationToken)
             .ConfigureAwait(false);
         UpdateWriteGate();
-        RefreshEditingServices();
+        await RefreshEditingServicesAsync().ConfigureAwait(false);
         await RefreshBackupServicesAsync(cancellationToken).ConfigureAwait(false);
         await WriteDraftRestoreBoundaryAsync(cancellationToken).ConfigureAwait(false);
         RestoreApplied?.Invoke();

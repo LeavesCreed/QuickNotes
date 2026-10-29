@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -622,7 +622,8 @@ public partial class WorkspaceWindow : Window
         }
     }
 
-    private async void NavigationList_SelectionChanged(object sender, SelectionChangedEventArgs e)    {
+    private async void NavigationList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
         if (_suppressSelection || NavigationList.SelectedItem is not NavItem item)
         {
             return;
