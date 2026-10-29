@@ -1,4 +1,4 @@
-using System.Windows;
+﻿using System.Windows;
 using QuickNotes.Application;
 using QuickNotes.Domain;
 
@@ -24,6 +24,7 @@ public partial class CategoryManagerWindow : Window
         DeleteTargetCombo.SelectedItem = _categories.FirstOrDefault(
             category => category.Id == Category.UncategorizedId);
         CategoryList.SelectedItem = _categories.FirstOrDefault();
+        NameBox.Focus();
     }
 
     private void CategoryList_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)

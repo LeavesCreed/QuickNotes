@@ -1,4 +1,4 @@
-using System.Windows;
+﻿using System.Windows;
 using QuickNotes.Application;
 using QuickNotes.Domain;
 
@@ -23,6 +23,7 @@ public partial class TagManagerWindow : Window
         MergeTargetCombo.ItemsSource = _tags;
         MergeTargetCombo.SelectedItem = _tags.FirstOrDefault();
         TagList.SelectedItem = _tags.FirstOrDefault();
+        NameBox.Focus();
     }
 
     private void TagList_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)

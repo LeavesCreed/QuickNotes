@@ -1,4 +1,4 @@
-<Window x:Class="QuickNotes.Desktop.Wpf.WorkspaceWindow"
+﻿<Window x:Class="QuickNotes.Desktop.Wpf.WorkspaceWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="QuickNotes 管理中心"
@@ -6,7 +6,8 @@
         Height="760"
         MinWidth="900"
         MinHeight="600"
-        WindowStartupLocation="CenterScreen">
+        WindowStartupLocation="CenterScreen"
+        PreviewKeyDown="WorkspaceWindow_PreviewKeyDown">
     <Window.CommandBindings>
         <CommandBinding Command="ApplicationCommands.Save" Executed="SaveCommand_Executed" />
     </Window.CommandBindings>
@@ -40,6 +41,7 @@
                      Width="240"
                      Padding="6"
                      Margin="4,0,12,0"
+                     AutomationProperties.Name="搜索便签"
                      TextChanged="SearchBox_TextChanged" />
             <CheckBox x:Name="IncludeArchivedCheckBox"
                       Content="包含归档"
@@ -128,6 +130,16 @@
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
+                <TextBlock x:Name="EmptyStateText"
+                           Grid.Row="3"
+                           Margin="12,24"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Top"
+                           Foreground="#888888"
+                           TextWrapping="Wrap"
+                           IsHitTestVisible="False"
+                           Visibility="Collapsed"
+                           Text="没有符合条件的便签。可调整搜索/筛选，或新建便签。" />
             </Grid>
 
             <GridSplitter Grid.Column="1"

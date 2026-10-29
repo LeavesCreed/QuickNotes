@@ -1,4 +1,4 @@
-<Window x:Class="QuickNotes.Desktop.Wpf.NoteWindow"
+﻿<Window x:Class="QuickNotes.Desktop.Wpf.NoteWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="便签"
@@ -11,7 +11,8 @@
         ShowInTaskbar="False"
         ShowActivated="False"
         WindowStartupLocation="Manual"
-        Background="Transparent">
+        Background="Transparent"
+        PreviewKeyDown="NoteWindow_PreviewKeyDown">
     <Border x:Name="RootBorder"
             BorderBrush="#66000000"
             BorderThickness="1"
@@ -76,6 +77,7 @@
                 <TextBox x:Name="TitleBox"
                          BorderThickness="0"
                          Background="Transparent"
+                         AutomationProperties.Name="便签标题"
                          FontWeight="SemiBold"
                          FontSize="16"
                          Padding="0,2,0,6"
@@ -85,6 +87,7 @@
                          Grid.Row="1"
                          BorderThickness="0"
                          Background="Transparent"
+                         AutomationProperties.Name="便签正文"
                          AcceptsReturn="True"
                          TextWrapping="Wrap"
                          VerticalScrollBarVisibility="Auto"

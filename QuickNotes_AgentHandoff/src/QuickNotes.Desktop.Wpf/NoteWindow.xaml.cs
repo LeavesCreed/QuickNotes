@@ -322,6 +322,29 @@ public partial class NoteWindow : Window
         }
     }
 
+    private async void NoteWindow_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.S)
+        {
+            e.Handled = true;
+            await SaveAsync();
+            return;
+        }
+
+        if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.W)
+        {
+            e.Handled = true;
+            await HideWithIntentAsync();
+            return;
+        }
+
+        if (e.Key == Key.Escape && MoreButton.ContextMenu is { IsOpen: true } menu)
+        {
+            menu.IsOpen = false;
+            e.Handled = true;
+        }
+    }
+
     private void TopBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (e.ButtonState == MouseButtonState.Pressed)

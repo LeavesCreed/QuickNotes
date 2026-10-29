@@ -1,4 +1,4 @@
-using System.Windows;
+﻿using System.Windows;
 using QuickNotes.Application;
 using QuickNotes.Desktop.Hosting;
 using QuickNotes.Desktop.Hotkeys;
@@ -58,6 +58,7 @@ public partial class SettingsWindow : Window
             NewHotkeyBox.Text = hotkeys.NewNote ?? string.Empty;
             ManagementHotkeyBox.Text = hotkeys.OpenManagementCenter ?? string.Empty;
             ToggleHotkeyBox.Text = hotkeys.ToggleGlobalHidden ?? string.Empty;
+            DefaultFontSizeBox.Focus();
         }
         catch (Exception exception)
         {

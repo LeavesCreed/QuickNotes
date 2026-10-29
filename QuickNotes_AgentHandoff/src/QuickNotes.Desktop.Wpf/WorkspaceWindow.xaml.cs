@@ -177,6 +177,9 @@ public partial class WorkspaceWindow : Window
                 : items.FirstOrDefault(item => item.Id == selectedId);
             NotesList.SelectedItem = selected;
             _suppressSelection = false;
+            EmptyStateText.Visibility = items.Length == 0
+                ? Visibility.Visible
+                : Visibility.Collapsed;
             if (clearMissingSession && _session is not null && selected is null)
             {
                 await DisposeCurrentSessionAsync();
@@ -518,8 +521,39 @@ public partial class WorkspaceWindow : Window
         }
     }
 
-    private async void NavigationList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private async void WorkspaceWindow_PreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.N)
+        {
+            e.Handled = true;
+            await StartNewAsync();
+            return;
+        }
+
+        if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.F)
+        {
+            e.Handled = true;
+            SearchBox.Focus();
+            SearchBox.SelectAll();
+            return;
+        }
+
+        if (e.Key == Key.Escape)
+        {
+            if (SearchBox.IsKeyboardFocusWithin && !string.IsNullOrEmpty(SearchBox.Text))
+            {
+                SearchBox.Clear();
+                e.Handled = true;
+            }
+            else if (Keyboard.FocusedElement is TextBox)
+            {
+                NotesList.Focus();
+                e.Handled = true;
+            }
+        }
+    }
+
+    private async void NavigationList_SelectionChanged(object sender, SelectionChangedEventArgs e)    {
         if (_suppressSelection || NavigationList.SelectedItem is not NavItem item)
         {
             return;

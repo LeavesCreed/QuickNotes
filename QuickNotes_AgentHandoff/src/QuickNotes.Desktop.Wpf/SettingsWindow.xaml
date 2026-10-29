@@ -76,8 +76,8 @@
 
         <StackPanel Grid.Row="7" Orientation="Horizontal" HorizontalAlignment="Right">
             <TextBlock x:Name="ErrorText" Foreground="#A94442" Margin="0,0,12,0" VerticalAlignment="Center" />
-            <Button Content="保存" Padding="12,6" Margin="0,0,8,0" Click="SaveButton_Click" />
-            <Button Content="关闭" Padding="12,6" Click="CloseButton_Click" />
+            <Button Content="保存" Padding="12,6" Margin="0,0,8,0" IsDefault="True" Click="SaveButton_Click" />
+            <Button Content="关闭" Padding="12,6" IsCancel="True" Click="CloseButton_Click" />
         </StackPanel>
     </Grid>
 </Window>
