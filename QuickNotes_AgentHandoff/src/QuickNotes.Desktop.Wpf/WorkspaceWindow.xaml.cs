@@ -13,6 +13,7 @@ public partial class WorkspaceWindow : Window
 {
     private readonly DesktopApplicationHost _host;
     private readonly DesktopEditingServices _services;
+    private readonly NoteWindowManager? _noteWindows;
     private NoteEditorSession? _session;
     private bool _loadingEditor;
     private bool _suppressSelection;
@@ -28,11 +29,12 @@ public partial class WorkspaceWindow : Window
     private CancellationTokenSource? _searchDebounce;
     private Guid? _categoryFilterId;
 
-    public WorkspaceWindow(DesktopApplicationHost host)
+    public WorkspaceWindow(DesktopApplicationHost host, NoteWindowManager? noteWindows = null)
     {
         _host = host ?? throw new ArgumentNullException(nameof(host));
         _services = host.EditingServices
             ?? throw new InvalidOperationException("Editing services are not available.");
+        _noteWindows = noteWindows;
         InitializeComponent();
         BackupButton.IsEnabled = _host.BackupServices is not null;
         _suppressSelection = true;
@@ -195,17 +197,15 @@ public partial class WorkspaceWindow : Window
         }
 
         _session.StatusChanged -= Session_StatusChanged;
+        var noteId = _session.NoteId;
+        _session = null;
         try
         {
-            await _session.DisposeAsync();
+            await _services.Sessions.ReleaseAsync(noteId);
         }
         catch (Exception exception)
         {
-            _host.Log.TryWrite("ERROR", "workspace", "editor session dispose failed", exception.GetType().Name);
-        }
-        finally
-        {
-            _session = null;
+            _host.Log.TryWrite("ERROR", "workspace", "editor session release failed", exception.GetType().Name);
         }
     }
 
@@ -218,7 +218,7 @@ public partial class WorkspaceWindow : Window
 
         try
         {
-            var session = await _services.Workspace.CreateNewAsync();
+            var session = await _services.Sessions.CreateNewAsync();
             await BindSessionAsync(session);
             _suppressSelection = true;
             NotesList.SelectedItem = null;
@@ -246,16 +246,14 @@ public partial class WorkspaceWindow : Window
 
         try
         {
-            var session = await _services.Workspace.OpenAsync(noteId);
-            if (session is null)
-            {
-                MessageBox.Show(this, "该便签已不存在。", "QuickNotes", MessageBoxButton.OK, MessageBoxImage.Warning);
-                await RefreshNotesAsync();
-                SelectSessionItem();
-                return;
-            }
-
+            var session = await _services.Sessions.GetOrOpenAsync(noteId);
             await BindSessionAsync(session);
+        }
+        catch (NoteNotFoundException)
+        {
+            MessageBox.Show(this, "该便签已不存在。", "QuickNotes", MessageBoxButton.OK, MessageBoxImage.Warning);
+            await RefreshNotesAsync();
+            SelectSessionItem();
         }
         catch (Exception exception)
         {
@@ -266,17 +264,17 @@ public partial class WorkspaceWindow : Window
 
     private async Task BindSessionAsync(NoteEditorSession session)
     {
-        if (_session is not null)
+        if (ReferenceEquals(_session, session))
+        {
+            return;
+        }
+
+        if (_session is not null && !ReferenceEquals(_session, session))
         {
             _session.StatusChanged -= Session_StatusChanged;
-            try
-            {
-                await _session.DisposeAsync();
-            }
-            catch (Exception exception)
-            {
-                _host.Log.TryWrite("ERROR", "workspace", "editor session dispose failed", exception.GetType().Name);
-            }
+            var previousNoteId = _session.NoteId;
+            _session = null;
+            await _services.Sessions.ReleaseAsync(previousNoteId);
         }
 
         _session = session;
@@ -394,6 +392,10 @@ public partial class WorkspaceWindow : Window
         RestoreButton.IsEnabled = !_restoreFrozen && _navKind == NavKind.Trash && single;
         DeleteButton.IsEnabled = !_restoreFrozen && _navKind == NavKind.Trash && single;
         CopyButton.IsEnabled = !_restoreFrozen && single;
+        ToggleDisplayButton.IsEnabled = !_restoreFrozen && single && _session is not null;
+        ToggleDisplayButton.Content = _session?.DisplayIntent == NoteDisplayIntent.Visible
+            ? "隐藏便签"
+            : "显示便签";
         UndoButton.IsEnabled = !_restoreFrozen && _lastUndoToken is not null;
         BatchArchiveButton.IsEnabled = !_restoreFrozen && _navKind == NavKind.Active && hasSelection;
         BatchTrashButton.IsEnabled = !_restoreFrozen && _navKind == NavKind.Active && hasSelection;
@@ -738,6 +740,10 @@ public partial class WorkspaceWindow : Window
 
         UpdateSelectionText();
         UpdateButtons();
+        if (_noteWindows is not null)
+        {
+            await _noteWindows.RefreshAsync();
+        }
     }
 
     private void ShowBatchResult(BatchOperationResult result)
@@ -1179,6 +1185,44 @@ public partial class WorkspaceWindow : Window
         }
     }
 
+    private void NotesList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (_noteWindows is null
+            || NotesList.SelectedItems.Count != 1
+            || NotesList.SelectedItem is not NoteListItem item)
+        {
+            return;
+        }
+
+        _ = _noteWindows.ActivateNoteAsync(item.Id);
+    }
+
+    private async void ToggleDisplayButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_session is null || !await SaveCurrentBeforeManagementAsync())
+        {
+            return;
+        }
+
+        try
+        {
+            var target = _session.DisplayIntent == NoteDisplayIntent.Visible
+                ? NoteDisplayIntent.Hidden
+                : NoteDisplayIntent.Visible;
+            _session.ChangeDisplayIntent(target);
+            await _session.SaveNowAsync();
+            UpdateStatus();
+            if (_noteWindows is not null)
+            {
+                await _noteWindows.RefreshAsync();
+            }
+        }
+        catch (Exception exception)
+        {
+            ShowError("更新便签显示状态失败", exception);
+        }
+    }
+
     private async Task UpdateBackupStatusAsync()
     {
         if (_host.BackupServices is null)
@@ -1236,7 +1280,8 @@ public partial class WorkspaceWindow : Window
                     return;
                 }
 
-                await BindSessionAsync(restored);
+                var adopted = await _services.Sessions.AdoptAsync(restored);
+                await BindSessionAsync(adopted);
                 await RefreshNotesAsync();
                 SelectSessionItem();
                 UpdateStatus();
@@ -1288,11 +1333,12 @@ public partial class WorkspaceWindow : Window
         try
         {
             var newSession = await _session.SaveAsNewAsync();
-            await BindSessionAsync(newSession);
+            var adopted = await _services.Sessions.AdoptAsync(newSession);
+            await BindSessionAsync(adopted);
             await RefreshNotesAsync();
             SelectSessionItem();
             UpdateStatus();
-            if (newSession.Status.SaveState != EditorSaveState.Saved)
+            if (adopted.Status.SaveState != EditorSaveState.Saved)
             {
                 MessageBox.Show(
                     this,
@@ -1408,15 +1454,17 @@ public partial class WorkspaceWindow : Window
         {
             try
             {
-                var reopened = await _services.Workspace.OpenAsync(noteId);
-                if (reopened is not null)
-                {
-                    await BindSessionAsync(reopened);
-                }
-                else
-                {
-                    await BindSessionAsync(await _services.Workspace.CreateNewAsync());
-                }
+                var invalidated = _session;
+                _session = null;
+                invalidated.StatusChanged -= Session_StatusChanged;
+                await _services.Sessions.ReleaseAsync(noteId);
+                var reopened = await _services.Sessions.GetOrOpenAsync(noteId);
+                await BindSessionAsync(reopened);
+            }
+            catch (NoteNotFoundException)
+            {
+                var newSession = await _services.Sessions.CreateNewAsync();
+                await BindSessionAsync(newSession);
             }
             catch (Exception exception)
             {
@@ -1523,12 +1571,17 @@ public partial class WorkspaceWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
-        try
+        if (_session is { } session)
         {
-            _session?.DisposeAsync().AsTask().GetAwaiter().GetResult();
-        }
-        catch
-        {
+            session.StatusChanged -= Session_StatusChanged;
+            _session = null;
+            try
+            {
+                _services.Sessions.ReleaseAsync(session.NoteId).GetAwaiter().GetResult();
+            }
+            catch
+            {
+            }
         }
 
         base.OnClosed(e);

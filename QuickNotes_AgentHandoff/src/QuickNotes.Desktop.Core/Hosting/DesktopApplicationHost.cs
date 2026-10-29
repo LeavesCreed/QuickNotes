@@ -215,6 +215,12 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
         }
 
         _disposed = true;
+        if (_editingServices is not null)
+        {
+            await _editingServices.Sessions.DisposeAsync().ConfigureAwait(false);
+            _editingServices = null;
+        }
+
         if (_backupServices is not null)
         {
             await _backupServices.Host.DisposeAsync().ConfigureAwait(false);
@@ -255,11 +261,21 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
 
     private void RefreshEditingServices()
     {
+        RefreshEditingServicesAsync().GetAwaiter().GetResult();
+    }
+
+    private async Task RefreshEditingServicesAsync()
+    {
+        if (_editingServices is not null)
+        {
+            await _editingServices.Sessions.DisposeAsync().ConfigureAwait(false);
+            _editingServices = null;
+        }
+
         if (Assessment?.CanEnterNormalUse != true
             || _paths is null
             || _writeGate is null)
         {
-            _editingServices = null;
             return;
         }
 
@@ -291,6 +307,7 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
             _writeGate,
             _timeProvider);
         var undo = new ManagementUndoService(notes, _writeGate, _timeProvider);
+        var sessions = new EditorSessionRegistry(workspace);
         _editingServices = new DesktopEditingServices(
             notes,
             drafts,
@@ -300,7 +317,8 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
             catalog,
             management,
             undo,
-            settings);
+            settings,
+            sessions);
     }
 
     private async Task RefreshBackupServicesAsync(CancellationToken cancellationToken)

@@ -12,4 +12,5 @@ public sealed record DesktopEditingServices(
     ICatalogRepository Catalog,
     NoteManagementService Management,
     ManagementUndoService Undo,
-    IApplicationSettingsRepository Settings);
+    IApplicationSettingsRepository Settings,
+    EditorSessionRegistry Sessions);

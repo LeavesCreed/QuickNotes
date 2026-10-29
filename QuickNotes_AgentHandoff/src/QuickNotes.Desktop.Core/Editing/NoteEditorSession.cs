@@ -179,6 +179,17 @@ public sealed class NoteEditorSession : IAsyncDisposable
         }
     }
 
+    public NoteDisplayIntent DisplayIntent
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _snapshot.DisplayIntent;
+            }
+        }
+    }
+
     public bool HasPendingChanges
     {
         get
@@ -342,6 +353,34 @@ public sealed class NoteEditorSession : IAsyncDisposable
             {
                 Sequence = _snapshot.Sequence + 1,
                 IsPinned = isPinned,
+                ModifiedAtUtc = now
+            };
+            MarkModifiedLocked(now);
+        }
+
+        RaiseStatusChanged();
+    }
+
+    public void ChangeDisplayIntent(NoteDisplayIntent displayIntent)
+    {
+        if (!Enum.IsDefined(displayIntent))
+        {
+            throw new ArgumentOutOfRangeException(nameof(displayIntent));
+        }
+
+        lock (_sync)
+        {
+            ThrowIfDisposed();
+            if (_snapshot.DisplayIntent == displayIntent)
+            {
+                return;
+            }
+
+            var now = _timeProvider.GetUtcNow().ToUniversalTime();
+            _snapshot = _snapshot with
+            {
+                Sequence = _snapshot.Sequence + 1,
+                DisplayIntent = displayIntent,
                 ModifiedAtUtc = now
             };
             MarkModifiedLocked(now);
@@ -785,6 +824,17 @@ public sealed class NoteEditorSession : IAsyncDisposable
             lock (_sync)
             {
                 return _invalidated;
+            }
+        }
+    }
+
+    public bool IsDisposed
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _disposed;
             }
         }
     }

@@ -7,6 +7,7 @@ namespace QuickNotes.Desktop.Wpf;
 public partial class App : System.Windows.Application
 {
     private DesktopApplicationHost? _host;
+    private NoteWindowManager? _noteWindows;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -57,9 +58,16 @@ public partial class App : System.Windows.Application
             }
 
             _host.ActivationRequested += OnActivationRequested;
-            var window = result.Assessment?.CanEnterNormalUse == true
-                && _host.EditingServices is not null
-                ? new WorkspaceWindow(_host)
+            var canUseEditing = result.Assessment?.CanEnterNormalUse == true
+                && _host.EditingServices is not null;
+            if (canUseEditing)
+            {
+                _noteWindows = new NoteWindowManager(_host);
+                await _noteWindows.StartAsync();
+            }
+
+            var window = canUseEditing
+                ? new WorkspaceWindow(_host, _noteWindows)
                 : (Window)new StartupWindow(_host);
             MainWindow = window;
             ShutdownMode = ShutdownMode.OnMainWindowClose;
@@ -106,21 +114,45 @@ public partial class App : System.Windows.Application
             }
 
             var oldWindow = MainWindow;
-            var window = _host.Assessment?.CanEnterNormalUse == true
-                && _host.EditingServices is not null
-                ? new WorkspaceWindow(_host)
-                : (Window)new StartupWindow(_host);
-            MainWindow = window;
-            window.Show();
-            if (oldWindow is WorkspaceWindow workspace)
-            {
-                workspace.CloseAfterRestore();
-            }
-            else
-            {
-                oldWindow?.Close();
-            }
+            var oldNoteWindows = _noteWindows;
+            _noteWindows = null;
+            _ = RebuildAfterRestoreAsync(oldWindow, oldNoteWindows);
         });
+    }
+
+    private async Task RebuildAfterRestoreAsync(Window? oldWindow, NoteWindowManager? oldNoteWindows)
+    {
+        if (_host is null)
+        {
+            return;
+        }
+
+        if (oldNoteWindows is not null)
+        {
+            await oldNoteWindows.DisposeAsync();
+        }
+
+        var canUseEditing = _host.Assessment?.CanEnterNormalUse == true
+            && _host.EditingServices is not null;
+        if (canUseEditing)
+        {
+            _noteWindows = new NoteWindowManager(_host);
+            await _noteWindows.StartAsync();
+        }
+
+        var window = canUseEditing
+            ? new WorkspaceWindow(_host, _noteWindows)
+            : (Window)new StartupWindow(_host);
+        MainWindow = window;
+        window.Show();
+        if (oldWindow is WorkspaceWindow workspace)
+        {
+            workspace.CloseAfterRestore();
+        }
+        else
+        {
+            oldWindow?.Close();
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)
@@ -128,6 +160,8 @@ public partial class App : System.Windows.Application
         SystemEvents.PowerModeChanged -= OnPowerModeChanged;
         try
         {
+            _noteWindows?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            _noteWindows = null;
             _host?.Dispose();
         }
         catch

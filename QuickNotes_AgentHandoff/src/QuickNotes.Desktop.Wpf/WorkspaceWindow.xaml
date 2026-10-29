@@ -110,6 +110,7 @@
                          Grid.Row="3"
                          SelectionMode="Extended"
                          SelectionChanged="NotesList_SelectionChanged"
+                         MouseDoubleClick="NotesList_MouseDoubleClick"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                     <ListBox.ItemTemplate>
                         <DataTemplate>
@@ -271,6 +272,7 @@
                     <Button x:Name="TrashButton" Content="移入回收站" Padding="10,4" Margin="0,0,6,0" Click="TrashButton_Click" />
                     <Button x:Name="RestoreButton" Content="恢复" Padding="10,4" Margin="0,0,6,0" Click="RestoreButton_Click" />
                     <Button x:Name="DeleteButton" Content="永久删除" Padding="10,4" Margin="0,0,6,0" Click="DeleteButton_Click" />
+                    <Button x:Name="ToggleDisplayButton" Content="隐藏便签" Padding="10,4" Margin="0,0,6,0" Click="ToggleDisplayButton_Click" />
                     <Button x:Name="UndoButton" Content="撤销上一管理操作" Padding="10,4" Click="UndoButton_Click" />
                 </StackPanel>
 
