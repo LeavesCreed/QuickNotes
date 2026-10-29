@@ -1471,6 +1471,17 @@ public partial class WorkspaceWindow : Window
             return false;
         }
 
+        if (_noteWindows is not null && !await _noteWindows.PrepareForRestoreAsync())
+        {
+            MessageBox.Show(
+                this,
+                "桌面便签未能保存，恢复已取消。请先处理保存失败或冲突。",
+                "QuickNotes",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return false;
+        }
+
         if (_session is null)
         {
             return true;

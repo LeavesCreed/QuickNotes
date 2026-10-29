@@ -1,4 +1,4 @@
-using System.Windows.Threading;
+﻿using System.Windows.Threading;
 using QuickNotes.Application;
 using QuickNotes.Desktop.Hosting;
 using QuickNotes.Domain;
@@ -8,6 +8,7 @@ namespace QuickNotes.Desktop.Wpf;
 public sealed class NoteWindowManager : IAsyncDisposable
 {
     private readonly DesktopApplicationHost _host;
+    private readonly DesktopEditingServices _services;
     private readonly Dictionary<Guid, NoteWindow> _windows = new();
     private readonly SemaphoreSlim _syncGate = new(1, 1);
     private readonly DispatcherTimer _timer;
@@ -18,6 +19,8 @@ public sealed class NoteWindowManager : IAsyncDisposable
     public NoteWindowManager(DesktopApplicationHost host)
     {
         _host = host ?? throw new ArgumentNullException(nameof(host));
+        _services = host.EditingServices
+            ?? throw new InvalidOperationException("Editing services are not available.");
         _timer = new DispatcherTimer(DispatcherPriority.Background)
         {
             Interval = TimeSpan.FromSeconds(2)
@@ -49,7 +52,7 @@ public sealed class NoteWindowManager : IAsyncDisposable
         await _syncGate.WaitAsync();
         try
         {
-            var services = _host.EditingServices;
+            var services = _services;
             if (services is null)
             {
                 await CloseAllWindowsAsync();
@@ -129,7 +132,7 @@ public sealed class NoteWindowManager : IAsyncDisposable
 
     public async Task ActivateNoteAsync(Guid noteId)
     {
-        var services = _host.EditingServices;
+        var services = _services;
         if (services is null)
         {
             return;
@@ -204,11 +207,12 @@ public sealed class NoteWindowManager : IAsyncDisposable
 
     public async Task ReapplyPlacementAsync()
     {
-        if (_disposed || _host.EditingServices is not { } services)
+        if (_disposed)
         {
             return;
         }
 
+        var services = _services;
         var bindings = await ReadDisplayBindingsAsync();
         foreach (var (noteId, window) in _windows)
         {
@@ -276,7 +280,45 @@ public sealed class NoteWindowManager : IAsyncDisposable
         }
 
         window.CloseFromManager();
-        await _host.EditingServices!.Sessions.ReleaseAsync(noteId);
+        await _services.Sessions.ReleaseAsync(noteId);
+    }
+
+    public async Task<bool> PrepareForRestoreAsync()
+    {
+        await _syncGate.WaitAsync();
+        try
+        {
+            foreach (var window in _windows.Values)
+            {
+                try
+                {
+                    await window.Session.FlushDraftAsync();
+                    if (window.Session.HasPendingChanges)
+                    {
+                        var result = await window.Session.SaveNowAsync();
+                        if (result.Status != SaveStatus.Saved || window.Session.HasPendingChanges)
+                        {
+                            return false;
+                        }
+                    }
+                }
+                catch (Exception exception)
+                {
+                    _host.Log.TryWrite(
+                        "ERROR",
+                        "note_windows",
+                        "note window save before restore failed",
+                        exception.GetType().Name);
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        finally
+        {
+            _syncGate.Release();
+        }
     }
 
     private async Task CloseAllWindowsAsync()
@@ -303,10 +345,7 @@ public sealed class NoteWindowManager : IAsyncDisposable
             }
 
             window.CloseFromManager();
-            if (_host.EditingServices is { } services)
-            {
-                await services.Sessions.ReleaseAsync(noteId);
-            }
+            await _services.Sessions.ReleaseAsync(noteId);
         }
 
         _windows.Clear();

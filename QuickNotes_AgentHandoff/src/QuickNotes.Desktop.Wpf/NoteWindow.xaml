@@ -55,6 +55,7 @@
                                     <MenuItem Header="归档" Click="ArchiveMenuItem_Click" />
                                     <MenuItem Header="移入回收站" Click="TrashMenuItem_Click" />
                                     <Separator />
+                                    <MenuItem x:Name="CategoryMenu" Header="分类" />
                                     <MenuItem x:Name="ColorMenu" Header="颜色" />
                                     <MenuItem x:Name="FontSizeMenu" Header="字号" />
                                 </ContextMenu>

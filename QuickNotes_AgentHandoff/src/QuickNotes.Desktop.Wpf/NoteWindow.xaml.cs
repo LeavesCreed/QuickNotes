@@ -42,6 +42,7 @@ public partial class NoteWindow : Window
         LocationChanged += NoteWindow_LayoutChanged;
         SizeChanged += NoteWindow_LayoutChanged;
         Loaded += NoteWindow_Loaded;
+        BuildCategoryMenu();
         BuildColorMenu();
         BuildFontSizeMenu();
     }
@@ -82,9 +83,13 @@ public partial class NoteWindow : Window
         ColorMenu.Visibility = actions.Contains(TopBarAction.Color)
             ? Visibility.Visible
             : Visibility.Collapsed;
+        CategoryMenu.Visibility = actions.Contains(TopBarAction.Category)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
         FontSizeMenu.Visibility = actions.Contains(TopBarAction.FontSize)
             ? Visibility.Visible
             : Visibility.Collapsed;
+        BuildCategoryMenu();
         await ApplySessionStateAsync();
     }
 
@@ -489,6 +494,38 @@ public partial class NoteWindow : Window
         catch (Exception exception)
         {
             _host.Log.TryWrite("ERROR", "note_window", "save failed", exception.GetType().Name);
+        }
+    }
+
+    private void BuildCategoryMenu()
+    {
+        CategoryMenu.Items.Clear();
+        foreach (var category in _categories)
+        {
+            var item = new MenuItem
+            {
+                Header = category.Name,
+                IsCheckable = true,
+                IsChecked = category.Id == _session.CategoryId
+            };
+            item.Click += async (_, _) =>
+            {
+                try
+                {
+                    _session.ChangeCategory(category.Id);
+                    await SaveAsync();
+                    await ApplySessionStateAsync();
+                }
+                catch (Exception exception)
+                {
+                    _host.Log.TryWrite(
+                        "ERROR",
+                        "note_window",
+                        "category change failed",
+                        exception.GetType().Name);
+                }
+            };
+            CategoryMenu.Items.Add(item);
         }
     }
 
