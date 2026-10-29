@@ -8,7 +8,7 @@ namespace QuickNotes.Infrastructure.Drafts;
 
 public sealed class FileNoteDraftStore : INoteDraftStore
 {
-    private const int CurrentFormatVersion = 1;
+    private const int CurrentFormatVersion = 2;
 
     private static readonly JsonSerializerOptions SerializerOptions = CreateSerializerOptions();
 
@@ -234,7 +234,7 @@ public sealed class FileNoteDraftStore : INoteDraftStore
             throw CreateCorruptException(operation, expectedDraftId, inner: null);
         }
 
-        if (document.FormatVersion != CurrentFormatVersion)
+        if (document.FormatVersion is < 1 or > CurrentFormatVersion)
         {
             throw new DraftStoreException(
                 operation,
@@ -263,15 +263,37 @@ public sealed class FileNoteDraftStore : INoteDraftStore
             $"Draft {draftId} is corrupt.",
             inner);
 
-    private static bool IsValid(DraftDocument document) =>
-        document.DraftId != Guid.Empty
-        && document.NoteId != Guid.Empty
-        && document.CategoryId != Guid.Empty
-        && document.Body is not null
-        && document.BaseVersion >= 0
-        && document.TagIds is not null
-        && document.TagIds.All(id => id != Guid.Empty)
-        && Enum.IsDefined(document.DisplayIntent);
+    private static bool IsValid(DraftDocument document)
+    {
+        if (document.DraftId == Guid.Empty
+            || document.NoteId == Guid.Empty
+            || document.CategoryId == Guid.Empty
+            || document.Body is null
+            || document.BaseVersion < 0
+            || document.TagIds is null
+            || document.TagIds.Any(id => id == Guid.Empty)
+            || !Enum.IsDefined(document.DisplayIntent))
+        {
+            return false;
+        }
+
+        if (document.FormatVersion < 2)
+        {
+            return true;
+        }
+
+        try
+        {
+            NoteRules.ValidateColor(document.ColorMode, document.ColorHex);
+            NoteRules.ValidateFontSize(document.FontSize);
+            NoteRules.ValidateWindowLayout(document.WindowLayout);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
 
     private static void ValidateDraft(NoteDraft draft)
     {
@@ -311,6 +333,10 @@ public sealed class FileNoteDraftStore : INoteDraftStore
         {
             throw new ArgumentException("DisplayIntent must be a defined value.", nameof(draft));
         }
+
+        NoteRules.ValidateColor(draft.ColorMode, draft.ColorHex);
+        NoteRules.ValidateFontSize(draft.FontSize);
+        NoteRules.ValidateWindowLayout(draft.WindowLayout);
     }
 
     private static void ValidateDraftId(Guid draftId, string parameterName)
@@ -368,6 +394,10 @@ public sealed class FileNoteDraftStore : INoteDraftStore
         public List<Guid>? TagIds { get; init; }
         public bool IsPinned { get; init; }
         public NoteDisplayIntent DisplayIntent { get; init; }
+        public NoteColorMode ColorMode { get; init; } = NoteColorMode.FollowCategory;
+        public string? ColorHex { get; init; }
+        public int? FontSize { get; init; }
+        public NoteWindowLayout? WindowLayout { get; init; }
         public DateTimeOffset CapturedAtUtc { get; init; }
 
         public static DraftDocument FromDraft(NoteDraft draft) => new()
@@ -382,6 +412,10 @@ public sealed class FileNoteDraftStore : INoteDraftStore
             TagIds = draft.TagIds.ToList(),
             IsPinned = draft.IsPinned,
             DisplayIntent = draft.DisplayIntent,
+            ColorMode = draft.ColorMode,
+            ColorHex = draft.ColorHex,
+            FontSize = draft.FontSize,
+            WindowLayout = draft.WindowLayout,
             CapturedAtUtc = draft.CapturedAtUtc
         };
 
@@ -396,6 +430,10 @@ public sealed class FileNoteDraftStore : INoteDraftStore
             TagIds = (TagIds ?? new List<Guid>()).AsReadOnly(),
             IsPinned = IsPinned,
             DisplayIntent = DisplayIntent,
+            ColorMode = ColorMode,
+            ColorHex = ColorHex,
+            FontSize = FontSize,
+            WindowLayout = WindowLayout,
             CapturedAtUtc = CapturedAtUtc
         };
     }

@@ -13,6 +13,11 @@ public sealed record EditorSnapshot
     public bool IsPinned { get; init; }
     public QuickNotes.Domain.NoteDisplayIntent DisplayIntent { get; init; } =
         QuickNotes.Domain.NoteDisplayIntent.Visible;
+    public QuickNotes.Domain.NoteColorMode ColorMode { get; init; } =
+        QuickNotes.Domain.NoteColorMode.FollowCategory;
+    public string? ColorHex { get; init; }
+    public int? FontSize { get; init; }
+    public QuickNotes.Domain.NoteWindowLayout? WindowLayout { get; init; }
     public required DateTimeOffset CreatedAtUtc { get; init; }
     public required DateTimeOffset ModifiedAtUtc { get; init; }
     public required long BaseVersion { get; init; }

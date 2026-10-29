@@ -7,6 +7,57 @@ namespace QuickNotes.Desktop.Tests;
 public sealed class NoteEditorSessionSaveTests
 {
     [Fact]
+    public async Task ChangeAppearanceAndLayout_SaveRoundTrips()
+    {
+        var (workspace, notes, saves, _) = CreateWorkspace();
+        var note = EditorTestData.NewNote(version: 1);
+        notes.Add(note);
+        saves.UpdateHandler = (saving, expectedVersion, tagIds, draftId, _) =>
+        {
+            var updated = saving with { Version = expectedVersion + 1 };
+            notes.Add(updated, tagIds);
+            return Task.FromResult(FakeSaveCoordinator.SavedResult(updated, draftId));
+        };
+        var session = (await workspace.OpenAsync(note.Id))!;
+
+        session.ChangeAppearance(NoteColorMode.Manual, "#FFCC00", 20);
+        session.ChangeLayout(new NoteWindowLayout
+        {
+            Left = -120,
+            Top = 80,
+            Width = 360,
+            Height = 280
+        });
+        Assert.Equal(2, session.Status.Sequence);
+
+        var result = await session.SaveNowAsync();
+
+        Assert.Equal(SaveStatus.Saved, result.Status);
+        var saved = notes.Notes[note.Id];
+        Assert.Equal(NoteColorMode.Manual, saved.ColorMode);
+        Assert.Equal("#FFCC00", saved.ColorHex);
+        Assert.Equal(20, saved.FontSize);
+        Assert.Equal(-120, saved.WindowLayout!.Left);
+        Assert.Equal(360, saved.WindowLayout.Width);
+        Assert.Equal(2, saved.Version);
+    }
+
+    [Fact]
+    public async Task ChangeAppearance_InvalidColor_DoesNotMutateSnapshot()
+    {
+        var (workspace, notes, _, _) = CreateWorkspace();
+        var note = EditorTestData.NewNote(version: 1);
+        notes.Add(note);
+        var session = (await workspace.OpenAsync(note.Id))!;
+
+        Assert.Throws<ArgumentException>(() =>
+            session.ChangeAppearance(NoteColorMode.Manual, "red", null));
+
+        Assert.Equal(0, session.Status.Sequence);
+        Assert.False(session.HasPendingChanges);
+    }
+
+    [Fact]
     public async Task Save_Success_MarksSavedAndAdvancesBaseVersion()
     {
         var (workspace, notes, saves, _) = CreateWorkspace();

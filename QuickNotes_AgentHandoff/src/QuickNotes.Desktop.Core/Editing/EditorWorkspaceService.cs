@@ -99,6 +99,10 @@ public sealed class EditorWorkspaceService
             TagIds = tagIds.ToArray(),
             IsPinned = draft.IsPinned,
             DisplayIntent = draft.DisplayIntent,
+            ColorMode = draft.ColorMode,
+            ColorHex = draft.ColorHex,
+            FontSize = draft.FontSize,
+            WindowLayout = draft.WindowLayout,
             CreatedAtUtc = note?.CreatedAtUtc ?? now,
             ModifiedAtUtc = draft.CapturedAtUtc,
             BaseVersion = note is null ? 0 : draft.BaseVersion
@@ -126,6 +130,10 @@ public sealed class EditorWorkspaceService
         TagIds = tagIds.ToArray(),
         IsPinned = note.IsPinned,
         DisplayIntent = note.DisplayIntent,
+        ColorMode = note.ColorMode,
+        ColorHex = note.ColorHex,
+        FontSize = note.FontSize,
+        WindowLayout = note.WindowLayout,
         CreatedAtUtc = note.CreatedAtUtc,
         ModifiedAtUtc = note.ModifiedAtUtc,
         BaseVersion = note.Version

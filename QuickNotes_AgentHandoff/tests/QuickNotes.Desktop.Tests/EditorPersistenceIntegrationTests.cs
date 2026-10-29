@@ -16,6 +16,14 @@ public sealed class EditorPersistenceIntegrationTests
         var context = await EditorContext.CreateAsync(temporary);
         var session = await context.Workspace.CreateNewAsync();
         session.ChangeText("persisted title", "persisted body");
+        session.ChangeAppearance(NoteColorMode.Manual, "#FFCC00", 20);
+        session.ChangeLayout(new NoteWindowLayout
+        {
+            Left = -120,
+            Top = 80,
+            Width = 360,
+            Height = 280
+        });
         var saved = await session.SaveNowAsync();
         Assert.Equal(SaveStatus.Saved, saved.Status);
         var noteId = session.NoteId;
@@ -28,8 +36,13 @@ public sealed class EditorPersistenceIntegrationTests
         Assert.NotNull(note);
         Assert.Equal("persisted title", note!.Title);
         Assert.Equal("persisted body", note.Body);
+        Assert.Equal(NoteColorMode.Manual, note.ColorMode);
+        Assert.Equal("#FFCC00", note.ColorHex);
+        Assert.Equal(20, note.FontSize);
+        Assert.Equal(360, note.WindowLayout!.Width);
         Assert.NotNull(openSession);
         Assert.Equal("persisted body", openSession!.Body);
+        Assert.Equal(NoteColorMode.Manual, openSession.ColorMode);
         Assert.Equal(1, openSession.Status.BaseVersion);
     }
 

@@ -101,6 +101,50 @@ public sealed class NoteEditorSession : IAsyncDisposable
         }
     }
 
+    public NoteColorMode ColorMode
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _snapshot.ColorMode;
+            }
+        }
+    }
+
+    public string? ColorHex
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _snapshot.ColorHex;
+            }
+        }
+    }
+
+    public int? FontSize
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _snapshot.FontSize;
+            }
+        }
+    }
+
+    public NoteWindowLayout? WindowLayout
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _snapshot.WindowLayout;
+            }
+        }
+    }
+
     public bool HasPendingChanges
     {
         get
@@ -132,22 +176,60 @@ public sealed class NoteEditorSession : IAsyncDisposable
                 Body = body,
                 ModifiedAtUtc = now
             };
-            if (_saveState is not (EditorSaveState.Conflict or EditorSaveState.OutcomeUnknown))
+            MarkModifiedLocked(now);
+        }
+
+        RaiseStatusChanged();
+    }
+
+    public void ChangeAppearance(NoteColorMode colorMode, string? colorHex, int? fontSize)
+    {
+        NoteRules.ValidateColor(colorMode, colorHex);
+        NoteRules.ValidateFontSize(fontSize);
+        lock (_sync)
+        {
+            ThrowIfDisposed();
+            if (_snapshot.ColorMode == colorMode
+                && string.Equals(_snapshot.ColorHex, colorHex, StringComparison.Ordinal)
+                && _snapshot.FontSize == fontSize)
             {
-                _saveState = EditorSaveState.Modified;
+                return;
             }
 
-            _draftState = DraftProtectionState.Pending;
-            _hasPendingChanges = true;
-            _errorCode = null;
-            _message = null;
-            _draftWindowStartedAt ??= now;
-            _saveWindowStartedAt ??= now;
-            ScheduleDraftLocked();
-            if (_saveState is not (EditorSaveState.Conflict or EditorSaveState.OutcomeUnknown))
+            var now = _timeProvider.GetUtcNow().ToUniversalTime();
+            _snapshot = _snapshot with
             {
-                ScheduleSaveLocked();
+                Sequence = _snapshot.Sequence + 1,
+                ColorMode = colorMode,
+                ColorHex = colorHex,
+                FontSize = fontSize,
+                ModifiedAtUtc = now
+            };
+            MarkModifiedLocked(now);
+        }
+
+        RaiseStatusChanged();
+    }
+
+    public void ChangeLayout(NoteWindowLayout? layout)
+    {
+        NoteRules.ValidateWindowLayout(layout);
+        lock (_sync)
+        {
+            ThrowIfDisposed();
+            if (Equals(_snapshot.WindowLayout, layout))
+            {
+                return;
             }
+
+            var now = _timeProvider.GetUtcNow().ToUniversalTime();
+            _snapshot = _snapshot with
+            {
+                Sequence = _snapshot.Sequence + 1,
+                WindowLayout = layout,
+                ModifiedAtUtc = now
+            };
+            MarkModifiedLocked(now);
         }
 
         RaiseStatusChanged();
@@ -489,6 +571,10 @@ public sealed class NoteEditorSession : IAsyncDisposable
                 TagIds = tagIds.ToArray(),
                 IsPinned = note.IsPinned,
                 DisplayIntent = note.DisplayIntent,
+                ColorMode = note.ColorMode,
+                ColorHex = note.ColorHex,
+                FontSize = note.FontSize,
+                WindowLayout = note.WindowLayout,
                 CreatedAtUtc = note.CreatedAtUtc,
                 ModifiedAtUtc = note.ModifiedAtUtc,
                 BaseVersion = note.Version
@@ -590,6 +676,26 @@ public sealed class NoteEditorSession : IAsyncDisposable
         CancelQuietly(_saveDebounce);
         _saveDebounce = null;
         await _lifetime.CancelAsync().ConfigureAwait(false);
+    }
+
+    private void MarkModifiedLocked(DateTimeOffset now)
+    {
+        if (_saveState is not (EditorSaveState.Conflict or EditorSaveState.OutcomeUnknown))
+        {
+            _saveState = EditorSaveState.Modified;
+        }
+
+        _draftState = DraftProtectionState.Pending;
+        _hasPendingChanges = true;
+        _errorCode = null;
+        _message = null;
+        _draftWindowStartedAt ??= now;
+        _saveWindowStartedAt ??= now;
+        ScheduleDraftLocked();
+        if (_saveState is not (EditorSaveState.Conflict or EditorSaveState.OutcomeUnknown))
+        {
+            ScheduleSaveLocked();
+        }
     }
 
     private void ScheduleDraftLocked()
@@ -836,7 +942,11 @@ public sealed class NoteEditorSession : IAsyncDisposable
         Lifecycle = NoteLifecycle.Active,
         CategoryId = snapshot.CategoryId,
         IsPinned = snapshot.IsPinned,
-        DisplayIntent = snapshot.DisplayIntent
+        DisplayIntent = snapshot.DisplayIntent,
+        ColorMode = snapshot.ColorMode,
+        ColorHex = snapshot.ColorHex,
+        FontSize = snapshot.FontSize,
+        WindowLayout = snapshot.WindowLayout
     };
 
     private NoteDraft ToDraft(EditorSnapshot snapshot) => new()
@@ -850,6 +960,10 @@ public sealed class NoteEditorSession : IAsyncDisposable
         TagIds = snapshot.TagIds,
         IsPinned = snapshot.IsPinned,
         DisplayIntent = snapshot.DisplayIntent,
+        ColorMode = snapshot.ColorMode,
+        ColorHex = snapshot.ColorHex,
+        FontSize = snapshot.FontSize,
+        WindowLayout = snapshot.WindowLayout,
         CapturedAtUtc = _timeProvider.GetUtcNow().ToUniversalTime()
     };
 
@@ -858,7 +972,11 @@ public sealed class NoteEditorSession : IAsyncDisposable
         && string.Equals(stored.Body, snapshot.Body, StringComparison.Ordinal)
         && stored.CategoryId == snapshot.CategoryId
         && stored.IsPinned == snapshot.IsPinned
-        && stored.DisplayIntent == snapshot.DisplayIntent;
+        && stored.DisplayIntent == snapshot.DisplayIntent
+        && stored.ColorMode == snapshot.ColorMode
+        && string.Equals(stored.ColorHex, snapshot.ColorHex, StringComparison.Ordinal)
+        && stored.FontSize == snapshot.FontSize
+        && Equals(stored.WindowLayout, snapshot.WindowLayout);
 
     private static bool TagSetsEqual(
         IReadOnlyCollection<Guid> left,

@@ -73,8 +73,10 @@ public sealed class FileNoteDraftStoreTests
         var bytes = await File.ReadAllBytesAsync(path);
         Assert.False(bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF);
         var json = System.Text.Encoding.UTF8.GetString(bytes);
-        Assert.Contains("\"formatVersion\": 1", json);
+        Assert.Contains("\"formatVersion\": 2", json);
         Assert.Contains("\"displayIntent\": \"Visible\"", json);
+        Assert.Contains("\"colorMode\": \"Manual\"", json);
+        Assert.Contains("\"fontSize\": 20", json);
         Assert.DoesNotContain("DraftId", json);
     }
 
@@ -163,7 +165,7 @@ public sealed class FileNoteDraftStoreTests
         var path = Path.Combine(temporary.DraftDirectory, $"{draftId:D}.json");
         await File.WriteAllTextAsync(path, $$"""
             {
-              "formatVersion": 2,
+              "formatVersion": 3,
               "draftId": "{{draftId:D}}",
               "noteId": "{{noteId:D}}",
               "baseVersion": 0,
@@ -181,6 +183,40 @@ public sealed class FileNoteDraftStoreTests
         var exception = await Assert.ThrowsAsync<DraftStoreException>(() => store.GetAsync(draftId));
 
         Assert.Equal("draft_unsupported_version", exception.ErrorCode);
+    }
+
+    [Fact]
+    public async Task Get_V1Draft_UsesDefaultAppearanceAndLayout()
+    {
+        using var temporary = new TemporaryDirectory();
+        Directory.CreateDirectory(temporary.DraftDirectory);
+        var draftId = Guid.NewGuid();
+        var path = Path.Combine(temporary.DraftDirectory, $"{draftId:D}.json");
+        await File.WriteAllTextAsync(path, $$"""
+            {
+              "formatVersion": 1,
+              "draftId": "{{draftId:D}}",
+              "noteId": "{{Guid.NewGuid():D}}",
+              "baseVersion": 1,
+              "title": "legacy",
+              "body": "legacy body",
+              "categoryId": "{{Category.UncategorizedId:D}}",
+              "tagIds": [],
+              "isPinned": false,
+              "displayIntent": "Visible",
+              "capturedAtUtc": "2026-10-27T12:00:00+00:00"
+            }
+            """);
+        var store = new FileNoteDraftStore(temporary.DraftDirectory);
+
+        var draft = await store.GetAsync(draftId);
+
+        Assert.NotNull(draft);
+        Assert.Equal("legacy body", draft!.Body);
+        Assert.Equal(NoteColorMode.FollowCategory, draft.ColorMode);
+        Assert.Null(draft.ColorHex);
+        Assert.Null(draft.FontSize);
+        Assert.Null(draft.WindowLayout);
     }
 
     [Fact]
@@ -363,6 +399,16 @@ public sealed class FileNoteDraftStoreTests
         Body = "body",
         CategoryId = Category.UncategorizedId,
         TagIds = Array.Empty<Guid>(),
+        ColorMode = NoteColorMode.Manual,
+        ColorHex = "#FFCC00",
+        FontSize = 20,
+        WindowLayout = new NoteWindowLayout
+        {
+            Left = -120,
+            Top = 80,
+            Width = 360,
+            Height = 280
+        },
         CapturedAtUtc = new DateTimeOffset(2026, 10, 27, 12, 0, 0, TimeSpan.Zero)
     };
 
@@ -377,6 +423,10 @@ public sealed class FileNoteDraftStoreTests
         Assert.Equal(expected.TagIds.OrderBy(id => id), actual.TagIds.OrderBy(id => id));
         Assert.Equal(expected.IsPinned, actual.IsPinned);
         Assert.Equal(expected.DisplayIntent, actual.DisplayIntent);
+        Assert.Equal(expected.ColorMode, actual.ColorMode);
+        Assert.Equal(expected.ColorHex, actual.ColorHex);
+        Assert.Equal(expected.FontSize, actual.FontSize);
+        Assert.Equal(expected.WindowLayout, actual.WindowLayout);
         Assert.Equal(expected.CapturedAtUtc, actual.CapturedAtUtc);
         Assert.Equal(expected.CapturedAtUtc.Offset, actual.CapturedAtUtc.Offset);
     }

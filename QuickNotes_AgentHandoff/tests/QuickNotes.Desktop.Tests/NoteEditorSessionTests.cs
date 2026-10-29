@@ -53,6 +53,29 @@ public sealed class NoteEditorSessionTests
     }
 
     [Fact]
+    public async Task ChangeAppearance_CapturesFieldsInDraft()
+    {
+        var (workspace, _, drafts, _) = CreateWorkspace();
+        var session = await workspace.CreateNewAsync();
+
+        session.ChangeAppearance(NoteColorMode.Manual, "#FFCC00", 20);
+        session.ChangeLayout(new NoteWindowLayout
+        {
+            Left = 10,
+            Top = 20,
+            Width = 300,
+            Height = 200
+        });
+        await session.FlushDraftAsync();
+
+        var draft = drafts.Drafts[session.DraftId];
+        Assert.Equal(NoteColorMode.Manual, draft.ColorMode);
+        Assert.Equal("#FFCC00", draft.ColorHex);
+        Assert.Equal(20, draft.FontSize);
+        Assert.Equal(300, draft.WindowLayout!.Width);
+    }
+
+    [Fact]
     public async Task DraftFailure_LeavesContentAndReportsUnprotected()
     {
         var (workspace, _, drafts, _) = CreateWorkspace();
