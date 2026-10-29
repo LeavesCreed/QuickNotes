@@ -24,6 +24,7 @@ public sealed class NoteEditorSession : IAsyncDisposable
     private string? _message;
     private bool _hasPendingChanges;
     private bool _disposed;
+    private bool _invalidated;
     private CancellationTokenSource? _draftDebounce;
     private CancellationTokenSource? _saveDebounce;
     private DateTimeOffset? _draftWindowStartedAt;
@@ -663,6 +664,37 @@ public sealed class NoteEditorSession : IAsyncDisposable
         RaiseStatusChanged();
     }
 
+    public bool IsInvalidated
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _invalidated;
+            }
+        }
+    }
+
+    public void Invalidate()
+    {
+        lock (_sync)
+        {
+            if (_disposed || _invalidated)
+            {
+                return;
+            }
+
+            _invalidated = true;
+            CancelQuietly(_draftDebounce);
+            _draftDebounce = null;
+            CancelQuietly(_saveDebounce);
+            _saveDebounce = null;
+        }
+
+        CancelQuietly(_lifetime);
+        RaiseStatusChanged();
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_disposed)
@@ -671,6 +703,7 @@ public sealed class NoteEditorSession : IAsyncDisposable
         }
 
         _disposed = true;
+        _invalidated = true;
         CancelQuietly(_draftDebounce);
         _draftDebounce = null;
         CancelQuietly(_saveDebounce);
@@ -1024,6 +1057,9 @@ public sealed class NoteEditorSession : IAsyncDisposable
 
     private void ThrowIfDisposed()
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_disposed || _invalidated)
+        {
+            throw new ObjectDisposedException(nameof(NoteEditorSession));
+        }
     }
 }

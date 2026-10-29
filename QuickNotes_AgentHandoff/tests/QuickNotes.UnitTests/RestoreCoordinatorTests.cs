@@ -190,6 +190,27 @@ public sealed class RestoreCoordinatorTests
     }
 
     [Fact]
+    public async Task Restore_ReportsProgressStages_AndDisablesCancellationAfterSwitch()
+    {
+        using var context = new RestoreTestContext();
+        var progress = new CollectingProgress();
+
+        var result = await context.Coordinator.RestoreAsync(context.Request, progress);
+
+        Assert.Equal(RestoreStatus.Succeeded, result.Status);
+        var stages = progress.Reports.Select(item => item.Stage).ToArray();
+        Assert.Contains(RestoreProgressStage.Preflight, stages);
+        Assert.Contains(RestoreProgressStage.ProtectionSnapshot, stages);
+        Assert.Contains(RestoreProgressStage.Staging, stages);
+        Assert.Contains(RestoreProgressStage.Migrating, stages);
+        Assert.Contains(RestoreProgressStage.Switching, stages);
+        Assert.Contains(RestoreProgressStage.Verifying, stages);
+        Assert.Contains(RestoreProgressStage.Completed, stages);
+        Assert.False(progress.Reports.Single(item => item.Stage == RestoreProgressStage.Switching).IsCancelable);
+        Assert.False(progress.Reports.Single(item => item.Stage == RestoreProgressStage.Verifying).IsCancelable);
+    }
+
+    [Fact]
     public async Task Restore_Success_ProtectsSwitchesVerifiesAndReleasesGate()
     {
         using var context = new RestoreTestContext();
@@ -417,6 +438,13 @@ public sealed class RestoreCoordinatorTests
             DurationMilliseconds = 1
         })
     };
+
+    private sealed class CollectingProgress : IProgress<RestoreProgress>
+    {
+        public List<RestoreProgress> Reports { get; } = new();
+
+        public void Report(RestoreProgress value) => Reports.Add(value);
+    }
 
     private sealed class RestoreTestContext : IDisposable
     {

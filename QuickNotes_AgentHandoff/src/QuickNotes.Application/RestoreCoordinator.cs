@@ -461,8 +461,26 @@ public sealed class RestoreCoordinator : IRestoreCoordinator
         {
             await using (lease)
             {
-                return await RestoreCoreAsync(request, preflight, startedAt, cancellationToken)
+                var result = await RestoreCoreAsync(
+                        request,
+                        preflight,
+                        progress,
+                        startedAt,
+                        cancellationToken)
                     .ConfigureAwait(false);
+                progress?.Report(new RestoreProgress(
+                    result.Status == RestoreStatus.Succeeded
+                        ? RestoreProgressStage.Completed
+                        : result.RolledBack
+                            ? RestoreProgressStage.RolledBack
+                            : RestoreProgressStage.Failed,
+                    result.Status == RestoreStatus.Succeeded
+                        ? "Restore completed."
+                        : result.RolledBack
+                            ? "Restore failed and the previous database was restored."
+                            : "Restore did not complete.",
+                    IsCancelable: false));
+                return result;
             }
         }
         catch (OperationCanceledException)
@@ -481,6 +499,7 @@ public sealed class RestoreCoordinator : IRestoreCoordinator
     private async Task<RestoreResult> RestoreCoreAsync(
         RestoreRequest request,
         RestorePreflightResult preflight,
+        IProgress<RestoreProgress>? progress,
         long startedAt,
         CancellationToken cancellationToken)
     {
@@ -528,6 +547,10 @@ public sealed class RestoreCoordinator : IRestoreCoordinator
         }
 
         BackupResult protection;
+        progress?.Report(new RestoreProgress(
+            RestoreProgressStage.ProtectionSnapshot,
+            "Creating a protection snapshot of the current database.",
+            IsCancelable: true));
         try
         {
             protection = await _backups.CreateAsync(
@@ -568,6 +591,10 @@ public sealed class RestoreCoordinator : IRestoreCoordinator
         var stagingDirectory = Path.Combine(
             currentDirectory,
             $".quicknotes-restore-{Guid.NewGuid():N}");
+        progress?.Report(new RestoreProgress(
+            RestoreProgressStage.Staging,
+            "Preparing the restored database.",
+            IsCancelable: true));
         try
         {
             Directory.CreateDirectory(stagingDirectory);
@@ -646,6 +673,10 @@ public sealed class RestoreCoordinator : IRestoreCoordinator
             string? targetHash;
             try
             {
+                progress?.Report(new RestoreProgress(
+                    RestoreProgressStage.Migrating,
+                    "Preparing the backup database for the current schema.",
+                    IsCancelable: true));
                 await _migrator
                     .MigrateToCurrentAsync(stagedPath, rotateIdentity: true, cancellationToken)
                     .ConfigureAwait(false);
@@ -704,6 +735,10 @@ public sealed class RestoreCoordinator : IRestoreCoordinator
             var switched = false;
             try
             {
+                progress?.Report(new RestoreProgress(
+                    RestoreProgressStage.Switching,
+                    "Switching the restored database into place.",
+                    IsCancelable: false));
                 switchStarted = true;
                 await _restoreStore
                     .SwitchAsync(
@@ -787,6 +822,10 @@ public sealed class RestoreCoordinator : IRestoreCoordinator
 
             var restored = await TryInspectAsync(request.CurrentDatabasePath)
                 .ConfigureAwait(false);
+            progress?.Report(new RestoreProgress(
+                RestoreProgressStage.Verifying,
+                "Verifying the restored database.",
+                IsCancelable: false));
             var restoredHash = await _restoreStore
                 .TryGetDatabaseHashAsync(
                     request.CurrentDatabasePath,

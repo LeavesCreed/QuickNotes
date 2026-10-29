@@ -54,6 +54,8 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
 
     public DesktopBackupServices? BackupServices => _backupServices;
 
+    public event Action? RestoreApplied;
+
     public event Action? ActivationRequested;
 
     public async Task<DesktopStartResult> StartAsync(CancellationToken cancellationToken = default)
@@ -329,7 +331,74 @@ public sealed class DesktopApplicationHost : IAsyncDisposable
             verifier,
             timeProvider: _timeProvider,
             log: _log);
-        _backupServices = new DesktopBackupServices(host, catalog, verifier, _deviceSettings);
+        var restore = new RestoreCoordinator(
+            verifier,
+            new SqliteRestoreStore(),
+            backups,
+            new FileNoteDraftStore(_paths.DraftDirectory),
+            new DriveInfoDiskSpaceProvider(),
+            _writeGate!,
+            new SqliteSchemaMigrator());
+        var boundary = new DraftRestoreBoundaryStore(_paths.DraftRestoreBoundaryPath);
+        _backupServices = new DesktopBackupServices(
+            host,
+            catalog,
+            verifier,
+            _deviceSettings,
+            restore,
+            boundary);
         await host.StartAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<StartupAssessment> RefreshAfterRestoreAsync(
+        CancellationToken cancellationToken = default)
+    {
+        EnsureStarted();
+        Assessment = await _startupCoordinator!
+            .StartAsync(cancellationToken)
+            .ConfigureAwait(false);
+        UpdateWriteGate();
+        RefreshEditingServices();
+        await RefreshBackupServicesAsync(cancellationToken).ConfigureAwait(false);
+        await WriteDraftRestoreBoundaryAsync(cancellationToken).ConfigureAwait(false);
+        RestoreApplied?.Invoke();
+        return Assessment;
+    }
+
+    private async Task WriteDraftRestoreBoundaryAsync(CancellationToken cancellationToken)
+    {
+        if (_paths is null || _editingServices is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var drafts = await _editingServices.Drafts
+                .ListAsync(noteId: null, cancellationToken)
+                .ConfigureAwait(false);
+            var boundary = new DraftRestoreBoundary
+            {
+                FormatVersion = DraftRestoreBoundary.CurrentFormatVersion,
+                RestoreId = Guid.NewGuid(),
+                RestoredAtUtc = _timeProvider.GetUtcNow().ToUniversalTime(),
+                DraftIds = drafts.Select(draft => draft.DraftId).ToArray()
+            };
+            await new DraftRestoreBoundaryStore(_paths.DraftRestoreBoundaryPath)
+                .WriteAsync(boundary, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            _log?.TryWrite(
+                "WARN",
+                "restore",
+                "draft restore boundary could not be persisted",
+                exception.GetType().Name);
+        }
     }
 }

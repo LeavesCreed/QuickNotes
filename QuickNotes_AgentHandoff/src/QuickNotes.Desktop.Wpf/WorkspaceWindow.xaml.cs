@@ -18,6 +18,8 @@ public partial class WorkspaceWindow : Window
     private bool _suppressSelection;
     private bool _allowClose;
     private bool _closing;
+    private bool _restoreFrozen;
+    private Guid? _restoreNoteId;
 
     public WorkspaceWindow(DesktopApplicationHost host)
     {
@@ -254,7 +256,7 @@ public partial class WorkspaceWindow : Window
         RetryDraftButton.Visibility = status.DraftState == DraftProtectionState.Failed
             ? Visibility.Visible
             : Visibility.Collapsed;
-        SaveButton.IsEnabled = !_closing && status.SaveState != EditorSaveState.Saving;
+        SaveButton.IsEnabled = !_closing && !_restoreFrozen && status.SaveState != EditorSaveState.Saving;
     }
 
     private static string SaveStateText(EditorSaveState state) => state switch
@@ -272,7 +274,7 @@ public partial class WorkspaceWindow : Window
 
     private void EditorTextChanged(object sender, TextChangedEventArgs e)
     {
-        if (_loadingEditor || _session is null)
+        if (_loadingEditor || _restoreFrozen || _session is null)
         {
             return;
         }
@@ -285,6 +287,7 @@ public partial class WorkspaceWindow : Window
     {
         if (_loadingEditor
             || _closing
+            || _restoreFrozen
             || _session is null
             || !_session.HasPendingChanges)
         {
@@ -486,6 +489,102 @@ public partial class WorkspaceWindow : Window
         {
             ShowError("草稿保护重试失败", exception);
         }
+    }
+
+    public async Task<bool> PrepareForRestoreAsync()
+    {
+        if (_restoreFrozen)
+        {
+            return false;
+        }
+
+        if (_session is null)
+        {
+            return true;
+        }
+
+        _restoreNoteId = _session.NoteId;
+        _restoreFrozen = true;
+        SetEditorReadOnly(true);
+        try
+        {
+            await _session.FlushDraftAsync();
+            if (_session.HasPendingChanges)
+            {
+                var result = await _session.SaveNowAsync();
+                if (result.Status != SaveStatus.Saved || _session.HasPendingChanges)
+                {
+                    MessageBox.Show(
+                        this,
+                        "恢复前无法保存当前便签。请先处理保存失败、冲突或未知结果，或取消恢复。",
+                        "QuickNotes",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                    await UnfreezeAfterRestoreFailureAsync();
+                    return false;
+                }
+            }
+
+            _session.Invalidate();
+            UpdateStatus();
+            return true;
+        }
+        catch (Exception exception)
+        {
+            _host.Log.TryWrite("ERROR", "workspace", "restore preparation failed", exception.GetType().Name);
+            MessageBox.Show(
+                this,
+                "恢复前无法完成草稿或保存保护；恢复已取消。",
+                "QuickNotes",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            await UnfreezeAfterRestoreFailureAsync();
+            return false;
+        }
+    }
+
+    public async Task UnfreezeAfterRestoreFailureAsync()
+    {
+        _restoreFrozen = false;
+        SetEditorReadOnly(false);
+        if (_session is { IsInvalidated: true } && _restoreNoteId is { } noteId)
+        {
+            try
+            {
+                var reopened = await _services.Workspace.OpenAsync(noteId);
+                if (reopened is not null)
+                {
+                    await BindSessionAsync(reopened);
+                }
+                else
+                {
+                    await BindSessionAsync(await _services.Workspace.CreateNewAsync());
+                }
+            }
+            catch (Exception exception)
+            {
+                ShowError("恢复失败后重新打开便签失败", exception);
+            }
+        }
+
+        _restoreNoteId = null;
+        UpdateStatus();
+    }
+
+    public void CloseAfterRestore()
+    {
+        _allowClose = true;
+        Close();
+    }
+
+    private void SetEditorReadOnly(bool readOnly)
+    {
+        TitleBox.IsReadOnly = readOnly;
+        BodyBox.IsReadOnly = readOnly;
+        NewButton.IsEnabled = !readOnly;
+        SaveButton.IsEnabled = !readOnly;
+        RefreshButton.IsEnabled = !readOnly;
+        DraftsButton.IsEnabled = !readOnly;
     }
 
     protected override void OnClosing(CancelEventArgs e)

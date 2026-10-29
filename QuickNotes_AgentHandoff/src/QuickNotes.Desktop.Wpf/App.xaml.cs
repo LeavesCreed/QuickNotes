@@ -33,6 +33,7 @@ public partial class App : System.Windows.Application
         }
 
         _host = new DesktopApplicationHost(options);
+        _host.RestoreApplied += OnRestoreApplied;
         try
         {
             var result = await _host.StartAsync();
@@ -90,6 +91,33 @@ public partial class App : System.Windows.Application
 
             window.Show();
             window.Activate();
+        });
+    }
+
+    private void OnRestoreApplied()
+    {
+        Dispatcher.Invoke(() =>
+        {
+            if (_host is null)
+            {
+                return;
+            }
+
+            var oldWindow = MainWindow;
+            var window = _host.Assessment?.CanEnterNormalUse == true
+                && _host.EditingServices is not null
+                ? new WorkspaceWindow(_host)
+                : (Window)new StartupWindow(_host);
+            MainWindow = window;
+            window.Show();
+            if (oldWindow is WorkspaceWindow workspace)
+            {
+                workspace.CloseAfterRestore();
+            }
+            else
+            {
+                oldWindow?.Close();
+            }
         });
     }
 
