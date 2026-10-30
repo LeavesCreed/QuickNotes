@@ -22,10 +22,12 @@ Confirmed acceptance shape (fail closed):
 
 The 2-hour soak gate requires 121 samples for 7,200 s at a 60 s cadence
 (minimum 120, one boundary sample tolerance), a maximum sample gap of 90 s,
-no unhandled exception/crash/dialog, stable 20-window counts, peak working set
-within budget, working-set growth at most 15%, and handle growth at most 50.
-A shorter -DurationMinutes run is a structural smoke only; it is never reported
-as 2-hour proof.
+no unhandled exception/crash/dialog, stable 20-window counts, a successful
+edit/save cycle every sample, and peak working set within the confirmed
+budget. A coarser cadence or fewer than 120 samples is a structural failure.
+The unconfirmed 15% working-set / 50-handle growth thresholds are diagnostic
+only, never gates. A shorter -DurationMinutes run is a structural smoke only;
+it is never reported as 2-hour proof.
 
 The result prints a machine-readable 2-hour command that always uses a fresh
 RunId and a sibling EvidenceRoot, so rerunning it cannot overwrite the current
@@ -257,7 +259,9 @@ function New-C6PerfCheck {
         [double]$Actual,
         [double]$Limit,
         [string]$Unit,
-        [bool]$BudgetGated = $true
+        [bool]$BudgetGated = $true,
+        [bool]$Diagnostic = $false,
+        [bool]$ThresholdConfirmed = $true
     )
 
     return [ordered]@{
@@ -266,6 +270,8 @@ function New-C6PerfCheck {
         limit = $Limit
         unit = $Unit
         budgetGated = $BudgetGated
+        diagnostic = $Diagnostic
+        thresholdConfirmed = $ThresholdConfirmed
         status = 'unconfirmed'
         passed = $false
     }
@@ -273,6 +279,14 @@ function New-C6PerfCheck {
 
 function Set-C6PerfCheckResult {
     param($Check, [bool]$Confirmed)
+
+    # Diagnostic checks record a reference comparison only. Their thresholds
+    # were not confirmed as C6 gates, so they never fail the run.
+    if ([bool]$Check.diagnostic) {
+        $Check.status = 'diagnostic'
+        $Check.passed = $null
+        return
+    }
 
     if (-not $Confirmed -and [bool]$Check.budgetGated) {
         $Check.status = 'unconfirmed'
@@ -607,7 +621,9 @@ if (-not $SkipUi) {
         $readyP95 = Get-C6Percentile -Values $uiReadyValues.ToArray() -Percentile 95
         $hostP95 = Get-C6Percentile -Values $uiHostValues.ToArray() -Percentile 95
         $checks.Add((New-C6PerfCheck 'startup_ui_p95' ([double]$readyP95) ([double]$budget.startupWithUiP95Ms) 'ms'))
-        $checks.Add((New-C6PerfCheck 'startup_ui_host_p95' ([double]$hostP95) ([double]$budget.startupReadyP95Ms) 'ms'))
+        # The host-start portion has no confirmed C0 UI budget; it reuses the
+        # service startup limit only as a reference and is diagnostic.
+        $checks.Add((New-C6PerfCheck 'startup_ui_host_p95' ([double]$hostP95) ([double]$budget.startupReadyP95Ms) 'ms' $false -Diagnostic $true -ThresholdConfirmed $false))
 
         $windowCounts = @(5, 10, 20 | Where-Object { $_ -le $activeNotes } | Select-Object -Unique)
         foreach ($count in $windowCounts) {
@@ -721,19 +737,24 @@ if (-not $SkipUi) {
 }
 
 # Optional soak. Any duration shorter than 120 minutes is explicitly a smoke.
+# The 2-hour acceptance run is fixed at 60 s samples: 121 expected, 120 minimum,
+# 90 s maximum gap. A coarser cadence is never a valid 2-hour run.
 $soakVisible = [Math]::Min(20, $Notes)
-$twoHourRequiredSampleCount = [int][Math]::Floor(7200 / $SoakSampleSeconds) + 1
-$twoHourMinimumSampleCount = [Math]::Max(2, $twoHourRequiredSampleCount - 1)
-$twoHourCadenceLimitSeconds = [double]$SoakSampleSeconds * 1.5
+$twoHourRequiredSampleCount = 121
+$twoHourMinimumSampleCount = 120
+$twoHourCadenceLimitSeconds = 90.0
 $soak = [ordered]@{
     status = 'NOT RUN'
     requestedMinutes = $DurationMinutes
     requestedSeconds = ($DurationMinutes * 60)
     sampleSeconds = $SoakSampleSeconds
     requiredMinutes = 120
+    sampleIntervalLimitSeconds = 60
     requiredSampleCount = $twoHourRequiredSampleCount
     minimumSampleCount = $twoHourMinimumSampleCount
     cadenceLimitSeconds = $twoHourCadenceLimitSeconds
+    growthThresholdsConfirmed = $false
+    growthThresholdRole = 'diagnostic'
     maximumWorkingSetGrowthPercent = 15
     maximumHandleGrowth = 50
     reason = $null
@@ -746,6 +767,7 @@ $soak = [ordered]@{
     handleGrowth = $null
     growthEvaluated = $false
     growthMethod = $null
+    editSaveFailureCount = $null
     sampleCount = 0
     completed = $false
     checks = @()
@@ -765,11 +787,20 @@ elseif ($DurationMinutes -eq 0) {
 }
 else {
     $soakSeconds = $DurationMinutes * 60
-    $samplesPath = Join-Path $rawDirectory 'soak-samples.jsonl'
-    $soakOutput = Join-Path $rawDirectory 'soak.json'
-    if (Test-Path -LiteralPath $samplesPath -PathType Leaf) {
-        Remove-Item -LiteralPath $samplesPath -Force
+    if ($DurationMinutes -ge 120 -and $SoakSampleSeconds -ne 60) {
+        # Refuse to spend two hours on an invalid cadence. A coarse interval is
+        # a structural failure, not a shorter 2-hour pass.
+        $soak.status = 'FAIL'
+        $soak.reason = "The 2-hour soak requires a 60 s sample cadence; received $SoakSampleSeconds s."
+        $soakChecks.Add((New-C6PerfCheck 'soak_sample_interval_seconds' `
+            ([double]$SoakSampleSeconds) 60 'seconds' $false))
     }
+    else {
+        $samplesPath = Join-Path $rawDirectory 'soak-samples.jsonl'
+        $soakOutput = Join-Path $rawDirectory 'soak.json'
+        if (Test-Path -LiteralPath $samplesPath -PathType Leaf) {
+            Remove-Item -LiteralPath $samplesPath -Force
+        }
 
     try {
         $launch = Invoke-C6UiProbeLaunch -ProbeDll $probeDll -Name 'soak' `
@@ -816,6 +847,7 @@ else {
                 $soak.lastWorkingSetBytes = $soakEvidence.lastWorkingSetBytes
                 $soak.firstHandleCount = $soakEvidence.firstHandleCount
                 $soak.lastHandleCount = $soakEvidence.lastHandleCount
+                $soak.editSaveFailureCount = [int](Get-C6ObjectProperty $soakEvidence 'editSaveFailureCount' -1)
                 $soak.sampleCount = [int]$soakEvidence.sampleCount
                 $soak.completed = [bool]$soakEvidence.completed
                 if (-not $soak.completed) {
@@ -866,15 +898,25 @@ else {
                         $measure.ProcessUnresponsiveCount 0 'count' $false))
                     $soakChecks.Add((New-C6PerfCheck 'soak_unexpected_windows' `
                         $measure.UnexpectedWindowCount 0 'count' $false))
+                    $soakChecks.Add((New-C6PerfCheck 'soak_edit_save_failures' `
+                        $measure.EditSaveFailureCount 0 'count' $false))
+                    if ($DurationMinutes -ge 120) {
+                        $soakChecks.Add((New-C6PerfCheck 'soak_sample_interval_seconds' `
+                            ([double]$SoakSampleSeconds) 60 'seconds' $false))
+                    }
 
                     if ($soak.status -ne 'FAIL') {
                         $soakChecks.Add((New-C6PerfCheck 'soak_peak_working_set' `
                             ([double]$soak.peakWorkingSetBytes) ([double]$budget.workingSetBytes) 'bytes'))
                         if ($measure.GrowthEvaluated) {
+                            # The 15%/50 growth thresholds were never confirmed as
+                            # C6 gates; record them as diagnostic references only.
                             $soakChecks.Add((New-C6PerfCheck 'soak_working_set_growth_percent' `
-                                ([double]$measure.WorkingSetGrowthPercent) 15 'percent' $false))
+                                ([double]$measure.WorkingSetGrowthPercent) 15 'percent' $false `
+                                -Diagnostic $true -ThresholdConfirmed $false))
                             $soakChecks.Add((New-C6PerfCheck 'soak_handle_growth' `
-                                ([double]$measure.HandleGrowth) 50 'count' $false))
+                                ([double]$measure.HandleGrowth) 50 'count' $false `
+                                -Diagnostic $true -ThresholdConfirmed $false))
                         }
 
                         $soak.status = 'PASS'
@@ -887,6 +929,7 @@ else {
         $soak.status = 'FAIL'
         $soak.reason = $_.Exception.Message
         $soakChecks.Add((New-C6PerfCheck 'soak_probe_failure' 1 0 'count' $false))
+    }
     }
 }
 
@@ -1083,9 +1126,12 @@ $actual['soak'] = $soak
 $actual['twoHourSoak'] = [ordered]@{
     status = $twoHourStatus
     requiredMinutes = 120
+    sampleIntervalLimitSeconds = 60
     requiredSampleCount = $twoHourRequiredSampleCount
     minimumSampleCount = $twoHourMinimumSampleCount
     cadenceLimitSeconds = $twoHourCadenceLimitSeconds
+    growthThresholdsConfirmed = $false
+    growthThresholdRole = 'diagnostic'
     maximumWorkingSetGrowthPercent = 15
     maximumHandleGrowth = 50
     command = $twoHour.command

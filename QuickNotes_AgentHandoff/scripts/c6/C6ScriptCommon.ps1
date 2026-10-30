@@ -118,19 +118,23 @@ Evaluates soak sample cadence, window stability, responsiveness, and growth.
 .DESCRIPTION
 Structural rules apply to every soak and fail closed:
 - expected samples = floor(duration / interval) + 1 (121 for 7,200 s at 60 s);
-- minimum accepted samples = max(2, expected - 1), so a single sample can
-  never pass;
+- a 2-hour soak (duration >= 7,200 s) must use a 60 s cadence and at least
+  120 samples; a coarser cadence is a structural failure, not a shorter pass;
+- minimum accepted samples = max(2, expected - 1) for smoke runs and at least
+  120 for a 2-hour run, so a single sample can never pass;
 - maximum gap between samples and before the first sample is 150% of the
   interval (90 s for a 60 s cadence);
 - the final sample must be no more than one cadence tolerance before the
   requested duration;
 - every sample must report the expected window count, a responding process,
-  and no unexpected (dialog/modal) windows.
+  no unexpected (dialog/modal) windows, and a completed edit/save cycle.
 
 Growth is evaluated only when -EvaluateGrowth is set (the 2-hour gate):
 - runs with at least 10 samples compare the median of the first 5 samples with
   the median of the last 5 samples;
-- shorter runs use the first vs last sample for diagnostics only.
+- shorter runs use the first vs last sample for diagnostics only;
+- the 15% working-set and 50-handle thresholds are NOT confirmed gates. Values
+  are returned for diagnostics; the caller must mark them diagnostic.
 #>
 function Measure-C6SoakEvidence {
     param(
@@ -149,10 +153,12 @@ function Measure-C6SoakEvidence {
         throw 'SampleSeconds must be at least 1.'
     }
 
+    $isTwoHourAcceptance = $DurationSeconds -ge 7200
     $items = @($Samples)
     $elapsedValues = New-Object System.Collections.Generic.List[double]
     $workingSetValues = New-Object System.Collections.Generic.List[double]
     $handleValues = New-Object System.Collections.Generic.List[double]
+    $editSaveFailureCount = 0
     foreach ($item in $items) {
         $elapsed = Get-C6ObjectProperty $item 'elapsedSeconds' $null
         $workingSet = Get-C6ObjectProperty $item 'workingSetBytes' $null
@@ -164,11 +170,21 @@ function Measure-C6SoakEvidence {
         $elapsedValues.Add([double]$elapsed)
         $workingSetValues.Add([double]$workingSet)
         $handleValues.Add([double]$handles)
+
+        $editSaveSucceeded = Get-C6ObjectProperty $item 'editSaveSucceeded' $null
+        if ($null -eq $editSaveSucceeded -or -not [bool]$editSaveSucceeded) {
+            $editSaveFailureCount++
+        }
     }
 
     $expectedSampleCount = [int][Math]::Floor($DurationSeconds / $SampleSeconds) + 1
-    $minimumSampleCount = [Math]::Max(2, $expectedSampleCount - 1)
-    $cadenceLimitSeconds = [double]$SampleSeconds * 1.5
+    $minimumSampleCount = if ($isTwoHourAcceptance) {
+        [Math]::Max(120, $expectedSampleCount - 1)
+    }
+    else {
+        [Math]::Max(2, $expectedSampleCount - 1)
+    }
+    $cadenceLimitSeconds = if ($isTwoHourAcceptance) { 90.0 } else { [double]$SampleSeconds * 1.5 }
     $firstElapsedSeconds = if ($elapsedValues.Count -eq 0) { $null } else { $elapsedValues[0] }
     $lastElapsedSeconds = if ($elapsedValues.Count -eq 0) { $null } else { $elapsedValues[$elapsedValues.Count - 1] }
 
@@ -204,6 +220,11 @@ function Measure-C6SoakEvidence {
     }
 
     $structuralFailures = New-Object System.Collections.Generic.List[string]
+    if ($isTwoHourAcceptance -and $SampleSeconds -ne 60) {
+        $structuralFailures.Add(
+            "The 2-hour soak requires a 60 s sample cadence; received $SampleSeconds s.")
+    }
+
     if ($items.Count -lt $minimumSampleCount) {
         $structuralFailures.Add(
             "Only $($items.Count) soak samples were recorded; at least $minimumSampleCount are required.")
@@ -249,6 +270,11 @@ function Measure-C6SoakEvidence {
     if ($unexpectedWindowCount -gt 0) {
         $structuralFailures.Add(
             "$unexpectedWindowCount soak sample(s) reported an unexpected dialog or window.")
+    }
+
+    if ($editSaveFailureCount -gt 0) {
+        $structuralFailures.Add(
+            "$editSaveFailureCount soak sample(s) did not complete an edit/save cycle.")
     }
 
     $growthEvaluated = $false
@@ -305,6 +331,7 @@ function Measure-C6SoakEvidence {
         WindowInstabilityCount = $windowInstabilityCount
         ProcessUnresponsiveCount = $processUnresponsiveCount
         UnexpectedWindowCount = $unexpectedWindowCount
+        EditSaveFailureCount = $editSaveFailureCount
         GrowthEvaluated = $growthEvaluated
         GrowthMethod = $growthMethod
         BaselineWorkingSetBytes = $baselineWorkingSetBytes
@@ -339,6 +366,10 @@ function New-C6TwoHourSoakCommand {
     Assert-C6RunId -RunId $RunId
     if ([string]::IsNullOrWhiteSpace($EvidenceRoot)) {
         throw 'EvidenceRoot is required to build the 2-hour soak command.'
+    }
+
+    if ($SoakSampleSeconds -ne 60) {
+        throw 'The 2-hour soak command requires a 60 s sample cadence.'
     }
 
     $stamp = if ([string]::IsNullOrWhiteSpace($Timestamp)) {
@@ -383,9 +414,9 @@ function New-C6TwoHourSoakCommand {
         ('-EvidenceRoot ' + (ConvertTo-C6QuotedArgument -Value $freshEvidenceRoot))
     )
     $envPrefix = '$env:C6_BUDGETS_CONFIRMED=''1''; '
-    $requiredSampleCount = [int][Math]::Floor(7200 / $SoakSampleSeconds) + 1
-    $minimumSampleCount = [Math]::Max(2, $requiredSampleCount - 1)
-    $cadenceLimitSeconds = [double]$SoakSampleSeconds * 1.5
+    $requiredSampleCount = 121
+    $minimumSampleCount = 120
+    $cadenceLimitSeconds = 90.0
 
     return [pscustomobject]@{
         runId = $freshRunId
@@ -393,9 +424,12 @@ function New-C6TwoHourSoakCommand {
         command = ($envPrefix + ($parts -join ' '))
         shell = 'pwsh'
         requiredMinutes = 120
+        sampleSeconds = 60
         requiredSampleCount = $requiredSampleCount
         minimumSampleCount = $minimumSampleCount
         cadenceLimitSeconds = $cadenceLimitSeconds
+        growthThresholdsConfirmed = $false
+        growthThresholdRole = 'diagnostic'
         maximumWorkingSetGrowthPercent = 15
         maximumHandleGrowth = 50
     }

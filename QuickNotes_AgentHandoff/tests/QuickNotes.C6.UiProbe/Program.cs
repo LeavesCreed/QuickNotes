@@ -136,7 +136,7 @@ internal static class Program
             SoakEvidence? soak = null;
             if (options.SoakSeconds > 0)
             {
-                soak = await RunSoakAsync(options).ConfigureAwait(true);
+                soak = await RunSoakAsync(host, options).ConfigureAwait(true);
             }
 
             var final = CaptureProcessMetrics();
@@ -281,63 +281,109 @@ internal static class Program
         return times;
     }
 
-    private static async Task<SoakEvidence> RunSoakAsync(UiProbeOptions options)
+    private static async Task<SoakEvidence> RunSoakAsync(
+        DesktopApplicationHost host,
+        UiProbeOptions options)
     {
-        var samples = new List<SoakSample>();
-        var startedAt = Stopwatch.GetTimestamp();
-        var nextSampleAt = TimeSpan.Zero;
-        var interval = TimeSpan.FromSeconds(options.SampleSeconds);
-        var duration = TimeSpan.FromSeconds(options.SoakSeconds);
-        while (true)
+        var services = host.EditingServices
+            ?? throw new UiProbeException("soak", "editing_services_missing");
+        var active = await services.Notes.ListAsync(NoteLifecycle.Active).ConfigureAwait(true);
+        var note = active.FirstOrDefault(item => item.DisplayIntent == NoteDisplayIntent.Visible)
+            ?? active.FirstOrDefault()
+            ?? throw new UiProbeException("soak", "no_active_note_for_edit_save");
+        var session = await services.Workspace.OpenAsync(note.Id).ConfigureAwait(true)
+            ?? throw new UiProbeException("soak", "edit_session_unavailable");
+        try
         {
-            var elapsed = Stopwatch.GetElapsedTime(startedAt);
-            if (elapsed >= duration)
+            var samples = new List<SoakSample>();
+            var startedAt = Stopwatch.GetTimestamp();
+            var nextSampleAt = TimeSpan.Zero;
+            var interval = TimeSpan.FromSeconds(options.SampleSeconds);
+            var duration = TimeSpan.FromSeconds(options.SoakSeconds);
+            while (true)
             {
-                break;
+                var elapsed = Stopwatch.GetElapsedTime(startedAt);
+                if (elapsed >= duration)
+                {
+                    break;
+                }
+
+                if (nextSampleAt > elapsed)
+                {
+                    await Task.Delay(nextSampleAt - elapsed);
+                }
+
+                // Every soak sample performs a real edit and save through the
+                // production editor session and save coordinator before the
+                // window show/hide cycle. The body text is synthetic and never
+                // written to the evidence; only the duration and outcome are.
+                var editSaveStartedAt = Stopwatch.GetTimestamp();
+                bool editSaveSucceeded;
+                string editSaveStatus;
+                try
+                {
+                    session.ChangeText(null, $"c6 soak edit {samples.Count:D4}");
+                    var saveResult = await session.SaveNowAsync().ConfigureAwait(true);
+                    editSaveSucceeded = saveResult.Status == SaveStatus.Saved;
+                    editSaveStatus = saveResult.Status.ToString();
+                }
+                catch (Exception exception)
+                {
+                    editSaveSucceeded = false;
+                    editSaveStatus = exception.GetType().Name;
+                }
+
+                var editSaveMs = Stopwatch.GetElapsedTime(editSaveStartedAt).TotalMilliseconds;
+                var cycleTimes = await RunShowHideCyclesAsync(1).ConfigureAwait(true);
+                var metrics = CaptureProcessMetrics();
+                var sample = new SoakSample
+                {
+                    ElapsedSeconds = Math.Round(Stopwatch.GetElapsedTime(startedAt).TotalSeconds, 3),
+                    WorkingSetBytes = metrics.WorkingSetBytes,
+                    PrivateBytes = metrics.PrivateBytes,
+                    HandleCount = metrics.HandleCount,
+                    ThreadCount = metrics.ThreadCount,
+                    WindowCount = WindowList().Length,
+                    ProcessResponding = metrics.Responding,
+                    UnexpectedWindowCount = CountUnexpectedWindows(),
+                    CycleMs = cycleTimes[0],
+                    EditSaveMs = editSaveMs,
+                    EditSaveSucceeded = editSaveSucceeded,
+                    EditSaveStatus = editSaveStatus
+                };
+                samples.Add(sample);
+                if (!string.IsNullOrWhiteSpace(options.SamplesPath))
+                {
+                    AppendSample(options.SamplesPath, sample);
+                }
+
+                nextSampleAt += interval;
             }
 
-            if (nextSampleAt > elapsed)
+            var editSaveTimes = samples.Select(item => item.EditSaveMs).ToList();
+            return new SoakEvidence
             {
-                await Task.Delay(nextSampleAt - elapsed);
-            }
-
-            var cycleTimes = await RunShowHideCyclesAsync(1);
-            var metrics = CaptureProcessMetrics();
-            var sample = new SoakSample
-            {
-                ElapsedSeconds = Math.Round(Stopwatch.GetElapsedTime(startedAt).TotalSeconds, 3),
-                WorkingSetBytes = metrics.WorkingSetBytes,
-                PrivateBytes = metrics.PrivateBytes,
-                HandleCount = metrics.HandleCount,
-                ThreadCount = metrics.ThreadCount,
-                WindowCount = WindowList().Length,
-                ProcessResponding = metrics.Responding,
-                UnexpectedWindowCount = CountUnexpectedWindows(),
-                CycleMs = cycleTimes[0]
+                DurationSeconds = options.SoakSeconds,
+                SampleSeconds = options.SampleSeconds,
+                SampleCount = samples.Count,
+                Completed = Stopwatch.GetElapsedTime(startedAt) >= duration,
+                PeakWorkingSetBytes = samples.Count == 0 ? 0 : samples.Max(item => item.WorkingSetBytes),
+                PeakHandleCount = samples.Count == 0 ? 0 : samples.Max(item => item.HandleCount),
+                FirstWorkingSetBytes = samples.Count == 0 ? null : samples[0].WorkingSetBytes,
+                LastWorkingSetBytes = samples.Count == 0 ? null : samples[^1].WorkingSetBytes,
+                FirstHandleCount = samples.Count == 0 ? null : samples[0].HandleCount,
+                LastHandleCount = samples.Count == 0 ? null : samples[^1].HandleCount,
+                EditSaveFailureCount = samples.Count(item => !item.EditSaveSucceeded),
+                EditSaveP50Ms = editSaveTimes.Count == 0 ? null : Percentile(editSaveTimes, 50),
+                EditSaveP95Ms = editSaveTimes.Count == 0 ? null : Percentile(editSaveTimes, 95),
+                EditSaveMaxMs = editSaveTimes.Count == 0 ? null : editSaveTimes.Max(),
+                Samples = samples
             };
-            samples.Add(sample);
-            if (!string.IsNullOrWhiteSpace(options.SamplesPath))
-            {
-                AppendSample(options.SamplesPath, sample);
-            }
-
-            nextSampleAt += interval;
         }
-
-        return new SoakEvidence
+        finally
         {
-            DurationSeconds = options.SoakSeconds,
-            SampleSeconds = options.SampleSeconds,
-            SampleCount = samples.Count,
-            Completed = Stopwatch.GetElapsedTime(startedAt) >= duration,
-            PeakWorkingSetBytes = samples.Count == 0 ? 0 : samples.Max(item => item.WorkingSetBytes),
-            PeakHandleCount = samples.Count == 0 ? 0 : samples.Max(item => item.HandleCount),
-            FirstWorkingSetBytes = samples.Count == 0 ? null : samples[0].WorkingSetBytes,
-            LastWorkingSetBytes = samples.Count == 0 ? null : samples[^1].WorkingSetBytes,
-            FirstHandleCount = samples.Count == 0 ? null : samples[0].HandleCount,
-            LastHandleCount = samples.Count == 0 ? null : samples[^1].HandleCount,
-            Samples = samples
-        };
+            await session.DisposeAsync().ConfigureAwait(true);
+        }
     }
 
     private static NoteWindow[] WindowList() =>
@@ -527,6 +573,10 @@ internal sealed record SoakEvidence
     public long? LastWorkingSetBytes { get; init; }
     public int? FirstHandleCount { get; init; }
     public int? LastHandleCount { get; init; }
+    public required int EditSaveFailureCount { get; init; }
+    public double? EditSaveP50Ms { get; init; }
+    public double? EditSaveP95Ms { get; init; }
+    public double? EditSaveMaxMs { get; init; }
     public required IReadOnlyList<SoakSample> Samples { get; init; }
 }
 
@@ -541,6 +591,9 @@ internal sealed record SoakSample
     public required bool ProcessResponding { get; init; }
     public required int UnexpectedWindowCount { get; init; }
     public required double CycleMs { get; init; }
+    public required double EditSaveMs { get; init; }
+    public required bool EditSaveSucceeded { get; init; }
+    public required string EditSaveStatus { get; init; }
 }
 
 internal sealed record UiProbeOptions
