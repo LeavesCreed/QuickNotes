@@ -454,10 +454,11 @@ public static class PerfScenario
         if (metric is null || !metric.HasSamples)
         {
             // A missing measurement is never silently skipped: it produces a
-            // check that cannot pass under a confirmed gate.
+            // check that cannot pass under a confirmed gate. Use the finite
+            // error sentinel so the result stays JSON-serializable.
             inputs.Add(new BudgetCheckInput(
                 $"{metricName}_p95",
-                double.PositiveInfinity,
+                MetricsCollector.ErrorDurationMs,
                 limit,
                 "ms"));
             return;
@@ -479,7 +480,7 @@ public static class PerfScenario
         var metric = metrics.FirstOrDefault(item => item.Name == metricName);
         inputs.Add(new BudgetCheckInput(
             $"{metricName}_p99",
-            metric is { HasSamples: true } ? metric.P99Ms : double.PositiveInfinity,
+            metric is { HasSamples: true } ? metric.P99Ms : MetricsCollector.ErrorDurationMs,
             limit,
             "ms"));
     }
