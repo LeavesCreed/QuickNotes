@@ -115,7 +115,8 @@ public static class RestartScenario
         var passed = databaseExists
             && readable
             && stateBefore is not null
-            && modeAccepted;
+            && modeAccepted
+            && total > 0;
         var probe = new RestartProbeEvidence
         {
             StartupMode = startupMode,
