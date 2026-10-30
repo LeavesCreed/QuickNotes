@@ -1,6 +1,6 @@
 # QuickNotes（C 阶段桌面与数据原型）
 
-QuickNotes 是面向 Windows 11 x64 的桌面便签软件。当前仓库包含数据/备份层、C1 桌面宿主/启动安全、C2 最小编辑闭环、C3 schema v2/迁移/确定性变更检测、C4 备份中心/调度/恢复交互、C5 管理中心/桌面行为与 C6 真实故障/性能/稳定性测试 Harness；**C6 自动化与故障矩阵已完成，但验收不通过（UI 启动 p95 PASS、性能聚合 NOT RUN、2h 长稳未运行、4 项存储故障未运行、A-11 未重测）；C5-M 已由用户实机确认通过；C7 交付评审尚未开始**。OS 通知、导出与安装器仍未实现。
+QuickNotes 是面向 Windows 11 x64 的桌面便签软件。当前仓库包含数据/备份层、C1 桌面宿主/启动安全、C2 最小编辑闭环、C3 schema v2/迁移/确定性变更检测、C4 备份中心/调度/恢复交互、C5 管理中心/桌面行为、C6 真实故障/性能/稳定性测试 Harness 与 C7 试用交付文档；**C6 自动化与故障矩阵已完成，但验收不通过（UI 启动 p95 PASS、性能聚合 NOT RUN、2h 长稳未运行、4 项存储故障未运行、A-11 未重测）；C5-M 已由用户实机确认通过；C7 为条件交付/技术评审附条件保留，C 阶段不得标记整体通过**。OS 通知、导出与安装器仍未实现。
 
 ## 当前状态
 
@@ -12,7 +12,8 @@ QuickNotes 是面向 Windows 11 x64 的桌面便签软件。当前仓库包含�
 - C3 交付 schema v2（颜色/字号/逻辑窗口布局、应用设置、数据库身份/变更序号）、启动迁移与保护快照、v1 包迁移恢复、快照基线。
 - C4 交付备份中心、首启目录提示、启动/周期/唤醒调度、备份列表/校验/手动删除、恢复确认/进度/取消、恢复后服务刷新与草稿边界。
 - C5-M 真实托盘/快捷键/开机启动/多显示器/DPI 人工矩阵已由用户于 2026-10-30 实机确认通过；C4 人工检查仍未执行；C6 性能/长稳/存储未运行项见 C6 报告。
-- 当前交付物是类库 + WPF 管理中心/便签窗口/托盘/诊断/备份宿主 + C6 测试 Harness/UiProbe + 自动化测试；测试、WPF 冒烟与部分 UI 自动化是当前可执行入口。
+- C7 产出框架依赖/自包含试用发布、normal/`--startup` 冒烟、试用与恢复指南、数据/备份兼容说明、C7 测试报告、已知限制、C 阶段完成总结与技术评审 ADR；技术结论为**附条件保留**，不是冻结或完整发布。
+- 当前交付物是类库 + WPF 管理中心/便签窗口/托盘/诊断/备份宿主 + C6 测试 Harness/UiProbe + 自动化测试 + C7 试用构建/文档；测试、WPF 冒烟与部分 UI 自动化是当前可执行入口。
 
 ## 环境要求
 
@@ -49,11 +50,24 @@ C5 追加指标：测试总计 **510/510**（单元 160 + 集成 187 + 桌面 16
 
 C6 追加指标（分支 `feature/c6-fault-stability`，代码 HEAD `f4c3031`）：测试总计 **660 通过 / 7 跳过 / 0 失败**（单元 160 + 集成 337 + 桌面 163）；C6 聚焦 **150 通过 / 7 跳过**；构建 0 警告、0 错误；漏洞审计 **12 个项目无已知漏洞包**；WPF 普通启动/`--startup` 冒烟通过。C6 故障矩阵、性能与未运行项见 [C6 测试报告](docs/agent/C6-测试报告.md)、[C6 故障矩阵](docs/agent/C6-故障矩阵.md)、[C6 性能与稳定性报告](docs/agent/C6-性能与稳定性报告.md)、[C6 完成总结](docs/agent/C6-完成总结.md)。**C6 UI 启动 p95 PASS（2,787.93 ms，F-C6-PERF-01 关闭）、2h 长稳 NOT RUN、性能聚合 NOT RUN、C6-F01/F04/F05/F06 NOT RUN、A-11 未重测；C5-M/C6-M06 已由用户实机确认通过，C6 仍未通过验收。**
 
+C7 追加指标（分支 `feature/c7-trial-delivery`，基线 `0c04b0d`）：Release 框架依赖/自包含发布成功；框架依赖目录 24 文件/约 3.8 MB，自包含 492 文件/约 183 MB；normal/`--startup` 临时数据根冒烟均 `Ready`/schema 2、日志无 ERROR；WPF 新建/正文写入/DB 回读 PASS；全量回归 **660 通过/7 跳过/0 失败**。试用步骤与限制见 [C7 试用与恢复指南](docs/agent/C7-试用与恢复指南.md)、[C7 测试报告](docs/agent/C7-测试报告.md)、[C7 已知限制与风险](docs/agent/C7-已知限制与风险.md)。
+
 ## 运行桌面应用
 
 ```powershell
-dotnet run --project QuickNotes_AgentHandoff/src/QuickNotes.Desktop.Wpf/QuickNotes.Desktop.Wpf.csproj -- --data-root "$env:TEMP\QuickNotes-C5-Demo"
+dotnet run --project QuickNotes_AgentHandoff/src/QuickNotes.Desktop.Wpf/QuickNotes.Desktop.Wpf.csproj -- --data-root "$env:TEMP\QuickNotes-C7-Demo"
 ```
+
+试用构建（C7）：
+
+```powershell
+dotnet publish QuickNotes_AgentHandoff/src/QuickNotes.Desktop.Wpf/QuickNotes.Desktop.Wpf.csproj `
+  -c Release -r win-x64 --self-contained false -o .\artifacts\quicknotes-trial-framework
+# 自包含：把 --self-contained 改为 true；入口均为 QuickNotes.Desktop.Wpf.exe
+```
+
+- 只使用 `%TEMP%\QuickNotes-C7\<RunId>` 合成数据；不要指向真实便签目录。
+- 完整试用、备份/恢复、阻断诊断与清理步骤见 [C7 试用与恢复指南](docs/agent/C7-试用与恢复指南.md)。
 
 - 数据层 Ready 时直接进入最小工作区；首次运行、恢复、阻断或只读诊断时显示启动/诊断窗口。
 - 管理中心支持 Active/归档/回收站、搜索/分类/标签筛选、多选/批量/撤销/副本、分类/标签管理与设置。
@@ -130,15 +144,16 @@ QuickNotes_AgentHandoff/
 - C4 证据：[测试报告](docs/agent/C4-测试报告.md)、[人工检查清单](docs/agent/C4-人工检查清单.md)、[错误 UX 清单](docs/agent/C4-错误UX清单.md)
 - C5 证据：[测试报告](docs/agent/C5-测试报告.md)、[完成总结](docs/agent/C5-完成总结.md)、[设备与人工矩阵](docs/agent/C5-设备与人工矩阵.md)、[错误 UX 清单](docs/agent/C5-错误UX清单.md)、[C5-B 人工检查清单](docs/agent/C5-B-人工检查清单.md)
 - C6 证据：[测试报告](docs/agent/C6-测试报告.md)、[故障矩阵](docs/agent/C6-故障矩阵.md)、[性能与稳定性报告](docs/agent/C6-性能与稳定性报告.md)、[完成总结](docs/agent/C6-完成总结.md)、[C6-M 人工检查清单](docs/agent/C6-M-人工检查清单.md)
-- 数据模型与备份格式：[B7 数据模型与备份格式](docs/agent/B7-数据模型与备份格式.md)
+- C7 交付：[试用与恢复指南](docs/agent/C7-试用与恢复指南.md)、[测试报告](docs/agent/C7-测试报告.md)、[已知限制与风险](docs/agent/C7-已知限制与风险.md)、[C 阶段完成总结](docs/agent/C阶段-完成总结.md)
+- 数据模型与备份格式：[B7 数据模型与备份格式](docs/agent/B7-数据模型与备份格式.md)、[C 阶段字段与恢复策略](docs/agent/C阶段-字段与恢复策略.md)
 - 技术与范围决策：[ADR 索引](docs/decisions/README.md)
 - 测试证据：[B7 测试报告](docs/agent/B7-测试报告.md)
 - 限制与后续：[B7 已知限制与后续建议](docs/agent/B7-已知限制与后续建议.md)
-- 实施计划：[B7 交付计划](docs/superpowers/plans/2026-10-28-b7-delivery.md)、[C6 故障/性能/稳定性计划](docs/superpowers/plans/2026-10-30-c6-fault-performance-stability.md)（其余计划在 `docs/superpowers/plans/`）
+- 实施计划：[B7 交付计划](docs/superpowers/plans/2026-10-28-b7-delivery.md)、[C6 故障/性能/稳定性计划](docs/superpowers/plans/2026-10-30-c6-fault-performance-stability.md)、[C7 试用交付计划](docs/superpowers/plans/2026-10-30-c7-trial-delivery.md)（其余计划在 `docs/superpowers/plans/`）
 
-## C6 状态与 C7 入口
+## C7 状态与技术评审
 
-C6 已完成 test-only Harness/UiProbe、隔离存储故障驱动、检查点强杀/重启、恢复不变量、1,000/20 性能与长稳门禁，默认全量 660 通过/7 跳过/0 失败。但 **C6 验收不通过**：C6-F01/F04/F05/F06 NOT RUN；2 小时长稳 NOT RUN；A-11 未重测。UI 启动 p95 已 PASS（settle 30 s + 20 次，2,787.93 ms vs 3,000 ms；F-C6-PERF-01 关闭为门禁方法缺陷），性能聚合仍为 NOT RUN。C5-M/C6-M06 已由用户实机确认通过，不再是入口阻塞项。C7 开始前必须关闭或书面风险接受剩余事项，并完成 UI 级 C6-M02/M03 人工检查；任何生产代码变更后需重跑全量测试、漏洞审计、WPF 冒烟与相关 C6 门禁。详见 [C6 完成总结](docs/agent/C6-完成总结.md)。
+C7 已完成可构建/可运行的试用构建（框架依赖/自包含）、normal/`--startup` 冒烟、试用与恢复指南、数据/备份兼容说明、C7 测试报告、已知限制、C 阶段完成总结与技术评审 ADR。**技术评审结论为“附条件保留（conditional retain）”**：核心数据/恢复闭环与 C6 自动化证据成立，但 C6 2h 长稳、F01/F04/F05/F06、A-11、UI 级 C6-M02/M03 及首次冷启动尾部仍未关闭，因此 C 阶段不得标记整体通过，C7 也不宣称发行级质量。关闭或书面风险接受这些事项后，才考虑冻结/发布。详见 [C 阶段完成总结](docs/agent/C阶段-完成总结.md)、[C7 测试报告](docs/agent/C7-测试报告.md)、[C7 已知限制与风险](docs/agent/C7-已知限制与风险.md)、[C7 技术评审 ADR](docs/decisions/2026-10-30-c7-trial-delivery-and-technical-review.md)。
 
 ## 安全与范围说明
 
@@ -150,4 +165,5 @@ C6 已完成 test-only Harness/UiProbe、隔离存储故障驱动、检查点强
 - C3 迁移保护快照与备份包未加密；设备设置文件不进入备份；C5 已提供设置页与多屏适配。
 - C4 备份运行状态/草稿恢复边界在工作区数据根；C5 已接入托盘、全局快捷键、开机启动与设置页，OS 系统通知仍未实现。
 - C5-M 真实托盘/快捷键/开机启动/多屏/DPI 人工矩阵已由用户于 2026-10-30 实机确认通过；导出仍不在 C5/C6 范围。
-- C6 已实现 test-only Harness/UiProbe 与隔离故障驱动；**未修改生产代码**。UI 启动 p95 PASS（2,787.93 ms，F-C6-PERF-01 关闭）、2h 长稳 NOT RUN、性能聚合 NOT RUN、C6-F01/F04/F05/F06 NOT RUN、A-11 未重测；C5-M/C6-M06 已由用户实机确认通过；真实断电/所有硬件覆盖未声明。C7 入口条件见 [C6 完成总结](docs/agent/C6-完成总结.md)。
+- C6 已实现 test-only Harness/UiProbe 与隔离故障驱动；**未修改生产代码**。UI 启动 p95 PASS（2,787.93 ms，F-C6-PERF-01 关闭）、2h 长稳 NOT RUN、性能聚合 NOT RUN、C6-F01/F04/F05/F06 NOT RUN、A-11 未重测；C5-M/C6-M06 已由用户实机确认通过；真实断电/所有硬件覆盖未声明。
+- C7 只交付试用构建和文档；技术评审为附条件保留。C6 开放项、首次冷启动 5,406.84 ms 诊断风险、无导出/安装器/OS 通知/自动更新/云存储、无 WAL/多实例写入、备份未加密、恢复阻断需人工处理等限制见 [C7 已知限制与风险](docs/agent/C7-已知限制与风险.md)。
