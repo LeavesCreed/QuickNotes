@@ -1,4 +1,5 @@
 using System.Globalization;
+using Microsoft.Data.Sqlite;
 using QuickNotes.Application;
 using QuickNotes.Domain;
 using QuickNotes.Infrastructure.Sqlite;
@@ -43,6 +44,43 @@ public static class C6DataFactory
         ("C6 Life", "#E2EFDA"),
         ("C6 Ideas", "#FCE4D6")
     };
+
+    private const string VersionOneDdl = """
+        CREATE TABLE categories (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+            default_color TEXT NOT NULL,
+            is_system INTEGER NOT NULL CHECK (is_system IN (0, 1))
+        );
+        CREATE TABLE tags (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL COLLATE NOCASE UNIQUE
+        );
+        CREATE TABLE notes (
+            id TEXT PRIMARY KEY,
+            title TEXT NULL,
+            body TEXT NOT NULL,
+            created_at_utc TEXT NOT NULL,
+            modified_at_utc TEXT NOT NULL,
+            version INTEGER NOT NULL CHECK (version >= 1),
+            lifecycle INTEGER NOT NULL CHECK (lifecycle IN (0, 1, 2)),
+            category_id TEXT NOT NULL,
+            is_pinned INTEGER NOT NULL CHECK (is_pinned IN (0, 1)),
+            display_intent INTEGER NOT NULL CHECK (display_intent IN (0, 1)),
+            FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE RESTRICT,
+            CHECK (lifecycle = 0 OR display_intent = 0)
+        );
+        CREATE TABLE note_tags (
+            note_id TEXT NOT NULL,
+            tag_id TEXT NOT NULL,
+            PRIMARY KEY (note_id, tag_id),
+            FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE,
+            FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+        );
+        CREATE INDEX ix_notes_category_id ON notes(category_id);
+        CREATE INDEX ix_notes_modified_at_utc ON notes(modified_at_utc DESC);
+        CREATE INDEX ix_note_tags_tag_id ON note_tags(tag_id);
+        """;
 
     private static readonly string[] TagNames =
     {
@@ -187,6 +225,109 @@ public static class C6DataFactory
         }
 
         return new SeedResult(noteIds.AsReadOnly(), visibleNoteIds.AsReadOnly());
+    }
+
+    /// <summary>
+    /// Creates a real schema-version-1 database for the migration kill matrix.
+    /// The DDL matches the shipped v1 schema so the production
+    /// <see cref="SqliteSchemaMigrator"/> performs the same v1-to-v2 upgrade it
+    /// performs for an upgraded installation. The rows are synthetic and embed
+    /// the C6 run ID, never a machine path.
+    /// </summary>
+    public static async Task<SeedResult> SeedVersionOneAsync(
+        string dataRoot,
+        int notes,
+        string runId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(dataRoot))
+        {
+            throw new ArgumentException("Data root must not be empty.", nameof(dataRoot));
+        }
+
+        if (notes < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(notes),
+                notes,
+                "Note count must be at least 1.");
+        }
+
+        if (string.IsNullOrWhiteSpace(runId))
+        {
+            throw new ArgumentException("C6 run ID must not be empty.", nameof(runId));
+        }
+
+        var fullDataRoot = Path.GetFullPath(dataRoot);
+        EnsureC6RunRoot(fullDataRoot, runId);
+        var databasePath = Path.Combine(fullDataRoot, "notes.db");
+        if (File.Exists(databasePath))
+        {
+            throw new InvalidOperationException(
+                "The C6 data root already contains notes.db. Seed a fresh run directory.");
+        }
+
+        Directory.CreateDirectory(fullDataRoot);
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Pooling = false
+        }.ToString();
+        await using var connection = new SqliteConnection(connectionString);
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await ExecuteAsync(connection, VersionOneDdl, cancellationToken).ConfigureAwait(false);
+        await using (var category = connection.CreateCommand())
+        {
+            category.CommandText = """
+                INSERT INTO categories (id, name, default_color, is_system)
+                VALUES ($id, $name, $color, 1);
+                """;
+            category.Parameters.AddWithValue("$id", Category.UncategorizedId.ToString("D"));
+            category.Parameters.AddWithValue("$name", "Uncategorized");
+            category.Parameters.AddWithValue("$color", "#E6E6FA");
+            await category.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        var noteIds = new List<Guid>(notes);
+        for (var index = 0; index < notes; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var id = DeterministicId(NoteIdKind, index);
+            var timestamp = TimestampBase.AddMinutes(index * 17L);
+            await using var insert = connection.CreateCommand();
+            insert.CommandText = """
+                INSERT INTO notes
+                    (id, title, body, created_at_utc, modified_at_utc, version,
+                     lifecycle, category_id, is_pinned, display_intent)
+                VALUES
+                    ($id, $title, $body, $created, $modified, 1, 0, $category, 0, 0);
+                """;
+            insert.Parameters.AddWithValue("$id", id.ToString("D"));
+            insert.Parameters.AddWithValue("$title", $"C6 v1 synthetic note {index:D4}");
+            insert.Parameters.AddWithValue(
+                "$body",
+                $"{SyntheticBodyMarker} run={runId} v1 body {index:D4}");
+            insert.Parameters.AddWithValue("$created", timestamp.ToString("O", CultureInfo.InvariantCulture));
+            insert.Parameters.AddWithValue("$modified", timestamp.ToString("O", CultureInfo.InvariantCulture));
+            insert.Parameters.AddWithValue("$category", Category.UncategorizedId.ToString("D"));
+            await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            noteIds.Add(id);
+        }
+
+        await ExecuteAsync(connection, "PRAGMA user_version=1;", cancellationToken)
+            .ConfigureAwait(false);
+        return new SeedResult(noteIds.AsReadOnly(), Array.Empty<Guid>());
+    }
+
+    private static async Task ExecuteAsync(
+        SqliteConnection connection,
+        string sql,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

@@ -274,14 +274,16 @@ function Get-C6EvidenceRoot {
     param(
         [string]$HandoffRoot,
         [string]$RunId,
-        [string]$EvidenceRoot
+        [string]$EvidenceRoot,
+        [string]$EvidenceTaskName = 'task-2-evidence'
     )
 
     $runRoot = Get-C6RunRoot -RunId $RunId
     if ([string]::IsNullOrWhiteSpace($EvidenceRoot)) {
         $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $HandoffRoot '..'))
         $EvidenceRoot = Join-Path $repoRoot (
-            '.superpowers\sdd\2026-10-30-c6-fault-performance-stability\task-2-evidence\' + $RunId)
+            '.superpowers\sdd\2026-10-30-c6-fault-performance-stability\' +
+            $EvidenceTaskName + '\' + $RunId)
     }
 
     $full = [System.IO.Path]::GetFullPath($EvidenceRoot)
@@ -291,6 +293,328 @@ function Get-C6EvidenceRoot {
 
     [System.IO.Directory]::CreateDirectory($full) | Out-Null
     return $full
+}
+
+function Get-C6HarnessDll {
+    param([string]$HandoffRoot)
+
+    $project = Join-Path $HandoffRoot 'tests\QuickNotes.C6.Harness\QuickNotes.C6.Harness.csproj'
+    $dll = Join-Path $HandoffRoot 'tests\QuickNotes.C6.Harness\bin\Debug\net10.0\QuickNotes.C6.Harness.dll'
+    if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) {
+        & dotnet build $project --nologo -v:q | Out-Null
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $dll -PathType Leaf)) {
+            throw 'QuickNotes.C6.Harness could not be built.'
+        }
+    }
+
+    return [System.IO.Path]::GetFullPath($dll)
+}
+
+function ConvertTo-C6QuotedArgument {
+    param([string]$Value)
+
+    if ($null -eq $Value) {
+        return '""'
+    }
+
+    if ($Value -notmatch '[\s"]') {
+        return $Value
+    }
+
+    return '"' + ($Value -replace '"', '\"') + '"'
+}
+
+function Start-C6HarnessProcess {
+    param(
+        [string]$HandoffRoot,
+        [string[]]$Arguments,
+        [string]$StdoutPath,
+        [string]$StderrPath
+    )
+
+    $dll = Get-C6HarnessDll -HandoffRoot $HandoffRoot
+    $parts = New-Object System.Collections.Generic.List[string]
+    $parts.Add((ConvertTo-C6QuotedArgument -Value $dll))
+    foreach ($argument in @($Arguments)) {
+        $parts.Add((ConvertTo-C6QuotedArgument -Value ([string]$argument)))
+    }
+
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = 'dotnet'
+    $startInfo.Arguments = ($parts -join ' ')
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.WorkingDirectory = [System.IO.Path]::GetDirectoryName($dll)
+
+    $process = [System.Diagnostics.Process]::Start($startInfo)
+    if ($null -eq $process) {
+        throw 'The C6 harness process could not be started.'
+    }
+
+    return [pscustomobject]@{
+        Process = $process
+        ProcessId = $process.Id
+        CommandLine = ($startInfo.FileName + ' ' + $startInfo.Arguments)
+        StdoutPath = [System.IO.Path]::GetFullPath($StdoutPath)
+        StderrPath = [System.IO.Path]::GetFullPath($StderrPath)
+    }
+}
+
+function Complete-C6HarnessProcess {
+    param(
+        $Started,
+        [int]$ExitTimeoutMilliseconds = 10000
+    )
+
+    if ($null -eq $Started -or $null -eq $Started.Process) {
+        return [pscustomobject]@{ ExitCode = $null; Stdout = ''; Stderr = '' }
+    }
+
+    $process = $Started.Process
+    if (-not $process.WaitForExit($ExitTimeoutMilliseconds)) {
+        throw 'The C6 harness process did not exit after the process tree was stopped.'
+    }
+
+    $stdout = $process.StandardOutput.ReadToEnd()
+    $stderr = $process.StandardError.ReadToEnd()
+    foreach ($pair in @(
+        @{ Path = $Started.StdoutPath; Text = $stdout },
+        @{ Path = $Started.StderrPath; Text = $stderr })) {
+        $directory = [System.IO.Path]::GetDirectoryName($pair.Path)
+        if (-not [string]::IsNullOrEmpty($directory)) {
+            [System.IO.Directory]::CreateDirectory($directory) | Out-Null
+        }
+
+        $encoding = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($pair.Path, [string]$pair.Text, $encoding)
+    }
+
+    return [pscustomobject]@{
+        ExitCode = $process.ExitCode
+        Stdout = $stdout
+        Stderr = $stderr
+    }
+}
+
+function Wait-C6Marker {
+    param(
+        [string]$Path,
+        [int]$TimeoutSeconds = 60
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            return $true
+        }
+
+        Start-Sleep -Milliseconds 50
+    }
+
+    return $false
+}
+
+function Get-C6ProcessCommandLine {
+    param([int]$ProcessId)
+
+    if ($ProcessId -le 4) {
+        return $null
+    }
+
+    try {
+        $process = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction Stop
+        if ($null -ne $process) {
+            return [string]$process.CommandLine
+        }
+    }
+    catch {
+    }
+
+    return $null
+}
+
+function Test-C6HarnessProcessIdentity {
+    param(
+        [string]$CommandLine,
+        [string]$RunId
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CommandLine) -or [string]::IsNullOrWhiteSpace($RunId)) {
+        return $false
+    }
+
+    $trimmed = $CommandLine.Trim()
+    $directExe = [regex]::IsMatch(
+        $trimmed,
+        '^(?:"[^"]*QuickNotes\.C6\.Harness\.exe"|\S*QuickNotes\.C6\.Harness\.exe)(?:\s|$)',
+        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    $dotnetDll = [regex]::IsMatch(
+        $trimmed,
+        '^(?:"[^"]*dotnet(?:\.exe)?"|\S*dotnet(?:\.exe)?)\s+(?:"[^"]*QuickNotes\.C6\.Harness\.dll"|\S*QuickNotes\.C6\.Harness\.dll)(?:\s|$)',
+        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if (-not $directExe -and -not $dotnetDll) {
+        return $false
+    }
+
+    $runIdPattern = '--run-id\s+"?' + [regex]::Escape($RunId) + '"?(\s|$)'
+    return [regex]::IsMatch($trimmed, $runIdPattern)
+}
+
+function Get-C6ProcessTreeIds {
+    param([int]$ProcessId)
+
+    if ($ProcessId -le 4) {
+        throw "Refusing to build a process tree for PID $ProcessId."
+    }
+
+    $all = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop |
+        Select-Object ProcessId, ParentProcessId)
+    $result = New-Object System.Collections.Generic.List[int]
+    $queue = New-Object System.Collections.Generic.Queue[int]
+    $queue.Enqueue($ProcessId)
+    while ($queue.Count -gt 0) {
+        $current = $queue.Dequeue()
+        if ($result -contains $current) {
+            continue
+        }
+
+        $result.Add($current)
+        foreach ($child in @($all | Where-Object { [int]$_.ParentProcessId -eq $current })) {
+            $queue.Enqueue([int]$child.ProcessId)
+        }
+    }
+
+    return $result.ToArray()
+}
+
+function Stop-C6ProcessTree {
+    param([int]$ProcessId)
+
+    if ($ProcessId -le 4) {
+        throw "Refusing to stop PID $ProcessId."
+    }
+
+    $ids = @(Get-C6ProcessTreeIds -ProcessId $ProcessId)
+    for ($index = $ids.Count - 1; $index -ge 0; $index--) {
+        Stop-Process -Id $ids[$index] -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Test-C6RestartEvidence {
+    param($Restart)
+
+    $failures = New-Object System.Collections.Generic.List[string]
+    if ($null -eq $Restart) {
+        return [pscustomobject]@{
+            Passed = $false
+            Failures = @('The restart probe produced no JSON result.')
+        }
+    }
+
+    $required = @(
+        'startupMode', 'writesBlocked', 'databaseReadable', 'databaseExists',
+        'noteCount', 'totalNoteCount', 'draftCountBeforeStartup',
+        'draftCountAfterStartup', 'draftCount', 'recoveryArtifacts', 'backupPackages'
+    )
+    foreach ($name in $required) {
+        if ($null -eq $Restart.PSObject.Properties[$name]) {
+            $failures.Add("The restart evidence is missing '$name'.")
+        }
+    }
+
+    if ($failures.Count -eq 0) {
+        $startupMode = [string]$Restart.startupMode
+        $allowedModes = @('Ready', 'NeedsRecovery', 'WriteBlocked', 'FirstRunInitialized', 'NoData', 'ReadOnlyDiagnostic')
+        if ($allowedModes -notcontains $startupMode) {
+            $failures.Add("Unexpected startupMode '$startupMode'.")
+        }
+
+        if ($Restart.writesBlocked -isnot [bool]) {
+            $failures.Add('writesBlocked must be a boolean.')
+        }
+
+        if ($Restart.databaseReadable -ne $true) {
+            $failures.Add('The restart probe could not read the database.')
+        }
+
+        if ($Restart.databaseExists -ne $true) {
+            $failures.Add('The database file is missing after the kill.')
+        }
+
+        if ([int64]$Restart.noteCount -lt 1) {
+            $failures.Add('The database reported no active notes after the kill.')
+        }
+
+        if ([int64]$Restart.totalNoteCount -lt 1) {
+            $failures.Add('The database reported no notes at all after the kill.')
+        }
+
+        if ([int64]$Restart.draftCount -lt 0) {
+            $failures.Add('The draft count is negative.')
+        }
+
+        if ([int64]$Restart.draftCountAfterStartup -lt 0) {
+            $failures.Add('The post-startup draft count is negative.')
+        }
+
+        if ([int64]$Restart.draftCountAfterStartup -lt [int64]$Restart.draftCountBeforeStartup) {
+            $failures.Add('Drafts disappeared during the restart probe.')
+        }
+
+        if ($Restart.recoveryArtifacts -isnot [System.Array]) {
+            $failures.Add('recoveryArtifacts must be an array.')
+        }
+
+        if ($Restart.backupPackages -isnot [System.Array]) {
+            $failures.Add('backupPackages must be an array.')
+        }
+
+        $json = $Restart | ConvertTo-Json -Depth 12 -Compress
+        if ($json -match '(?i)"(body|content|title)"\s*:') {
+            $failures.Add('The restart evidence contains note body/content/title fields.')
+        }
+    }
+
+    return [pscustomobject]@{
+        Passed = ($failures.Count -eq 0)
+        Failures = @($failures)
+    }
+}
+
+function Get-C6FileHashMap {
+    param([string]$Directory)
+
+    $map = [ordered]@{}
+    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
+        return $map
+    }
+
+    foreach ($file in @(Get-ChildItem -LiteralPath $Directory -Filter 'quicknotes-*.zip' -File)) {
+        $map[$file.Name] = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
+    }
+
+    return $map
+}
+
+function Get-C6PackageSummary {
+    param([string]$Directory)
+
+    $packages = @()
+    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
+        return $packages
+    }
+
+    foreach ($file in @(Get-ChildItem -LiteralPath $Directory -Filter 'quicknotes-*.zip' -File)) {
+        $packages += [ordered]@{
+            fileName = $file.Name
+            sizeBytes = [int64]$file.Length
+            sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
+        }
+    }
+
+    return $packages
 }
 
 function Write-C6JsonFile {

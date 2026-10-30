@@ -8,14 +8,17 @@ public enum HarnessScenario
     Backup,
     Restore,
     Migrate,
-    Perf
+    Perf,
+    Seed,
+    Restart
 }
 
 /// <summary>
 /// Parsed C6 harness command line. This is the CLI contract shared with the
-/// PowerShell drivers; scenario execution is added by Tasks 2-5.
-/// <see cref="CheckpointDirectory"/> is null for the documented perf form,
-/// which has no checkpoint because it does not inject a fault.
+/// PowerShell drivers. Task 2 realizes save/backup; Task 3 adds restore,
+/// migrate, seed, and restart; perf remains Task 5.
+/// <see cref="CheckpointDirectory"/> is null for the documented perf, seed,
+/// and restart forms, which do not inject checkpoints.
 /// </summary>
 public sealed record HarnessOptions
 {
@@ -48,6 +51,27 @@ public sealed record HarnessOptions
     public bool FaultDiskFull { get; init; }
     public bool FaultOffline { get; init; }
 
+    /// <summary>
+    /// Optional checkpoint at which the opt-in process-kill driver should stop
+    /// the harness. The sink writes the marker and then holds until the driver
+    /// kills this process tree, which makes each kill point deterministic.
+    /// </summary>
+    public string? KillMarker { get; init; }
+
+    /// <summary>
+    /// Restore-only harness fault that makes post-switch verification report a
+    /// count mismatch, driving the real coordinator into its rollback path for
+    /// C6-K07.
+    /// </summary>
+    public bool FaultPostSwitch { get; init; }
+
+    /// <summary>
+    /// Restart-probe-only note ID. When supplied, the probe reports that
+    /// note's stored version so a kill-at-save case can prove the note was not
+    /// committed without emitting the body.
+    /// </summary>
+    public Guid? ProbeNoteId { get; init; }
+
     public HarnessFaultMode FaultMode =>
         FaultDiskFull ? HarnessFaultMode.DiskFull
         : FaultOffline ? HarnessFaultMode.Offline
@@ -59,13 +83,13 @@ public sealed record HarnessOptions
         if (args.Length == 0)
         {
             throw new ArgumentException(
-                "A scenario is required. Supported scenarios: save, backup, restore, migrate, perf.");
+                "A scenario is required. Supported scenarios: save, backup, restore, migrate, perf, seed, restart.");
         }
 
         if (!TryParseScenario(args[0], out var scenario))
         {
             throw new ArgumentException(
-                $"Unknown scenario '{args[0]}'. Supported scenarios: save, backup, restore, migrate, perf.");
+                $"Unknown scenario '{args[0]}'. Supported scenarios: save, backup, restore, migrate, perf, seed, restart.");
         }
 
         string? dataRoot = null;
@@ -75,8 +99,11 @@ public sealed record HarnessOptions
         string? outputPath = null;
         string? runId = null;
         string? draftDirectory = null;
+        string? killMarker = null;
+        Guid? probeNoteId = null;
         var faultDiskFull = false;
         var faultOffline = false;
+        var faultPostSwitch = false;
         var noteCount = C6Budget.HistoricalNotes;
         var visibleCount = C6Budget.VisibleWindows;
         var sourceSchema = 1;
@@ -119,11 +146,20 @@ public sealed record HarnessOptions
                 case "--draft-dir":
                     draftDirectory = ReadValue(args, ref index, "--draft-dir");
                     break;
+                case "--kill-marker":
+                    killMarker = ReadValue(args, ref index, "--kill-marker");
+                    break;
+                case "--probe-note-id":
+                    probeNoteId = ReadGuid(args, ref index, "--probe-note-id");
+                    break;
                 case "--fault-disk-full":
                     faultDiskFull = true;
                     break;
                 case "--fault-offline":
                     faultOffline = true;
+                    break;
+                case "--fault-post-switch":
+                    faultPostSwitch = true;
                     break;
                 default:
                     throw new ArgumentException($"Unknown option '{args[index]}'.");
@@ -145,7 +181,10 @@ public sealed record HarnessOptions
             RunId = runId,
             DraftDirectory = draftDirectory,
             FaultDiskFull = faultDiskFull,
-            FaultOffline = faultOffline
+            FaultOffline = faultOffline,
+            KillMarker = killMarker,
+            FaultPostSwitch = faultPostSwitch,
+            ProbeNoteId = probeNoteId
         };
         parsed.Validate();
         return parsed;
@@ -159,6 +198,8 @@ public sealed record HarnessOptions
             HarnessScenario.Restore => "restore",
             HarnessScenario.Migrate => "migrate",
             HarnessScenario.Perf => "perf",
+            HarnessScenario.Seed => "seed",
+            HarnessScenario.Restart => "restart",
             _ => throw new ArgumentOutOfRangeException(nameof(scenario), scenario, "Unknown scenario.")
         };
 
@@ -169,12 +210,13 @@ public sealed record HarnessOptions
             throw new ArgumentException("--visible must not exceed --notes.");
         }
 
-        if (Scenario != HarnessScenario.Perf
+        if (Scenario is HarnessScenario.Save or HarnessScenario.Backup
+                or HarnessScenario.Restore or HarnessScenario.Migrate
             && string.IsNullOrWhiteSpace(CheckpointDirectory))
         {
             // Fault-injection scenarios write checkpoint markers so the
-            // external kill driver can stop the harness at a stage. perf does
-            // not inject faults and its documented form has no checkpoint dir.
+            // external kill driver can stop the harness at a stage. perf,
+            // seed, and restart do not inject faults and have no checkpoint.
             throw new ArgumentException(
                 $"--checkpoint-dir is required for the {ToCliName(Scenario)} scenario.");
         }
@@ -213,6 +255,12 @@ public sealed record HarnessOptions
                 "--fault-offline is only supported by the backup scenario.");
         }
 
+        if (FaultPostSwitch && Scenario != HarnessScenario.Restore)
+        {
+            throw new ArgumentException(
+                "--fault-post-switch is only supported by the restore scenario.");
+        }
+
         if (DraftDirectory is not null && Scenario != HarnessScenario.Save)
         {
             throw new ArgumentException("--draft-dir is only supported by the save scenario.");
@@ -221,6 +269,27 @@ public sealed record HarnessOptions
         if (RunId is not null && RunId.Trim().Length == 0)
         {
             throw new ArgumentException("Option --run-id requires a non-empty value.");
+        }
+
+        if (KillMarker is not null)
+        {
+            if (!CheckpointNames.IsKnownFor(Scenario, KillMarker))
+            {
+                throw new ArgumentException(
+                    $"--kill-marker '{KillMarker}' is not a checkpoint of the {ToCliName(Scenario)} scenario.");
+            }
+
+            if (string.IsNullOrWhiteSpace(RunId))
+            {
+                throw new ArgumentException(
+                    "--kill-marker requires --run-id so a process kill can be scoped to one C6 run.");
+            }
+        }
+
+        if (ProbeNoteId is not null && Scenario != HarnessScenario.Restart)
+        {
+            throw new ArgumentException(
+                "--probe-note-id is only supported by the restart scenario.");
         }
     }
 
@@ -242,6 +311,12 @@ public sealed record HarnessOptions
                 return true;
             case "perf":
                 scenario = HarnessScenario.Perf;
+                return true;
+            case "seed":
+                scenario = HarnessScenario.Seed;
+                return true;
+            case "restart":
+                scenario = HarnessScenario.Restart;
                 return true;
             default:
                 scenario = default;
@@ -273,6 +348,17 @@ public sealed record HarnessOptions
         {
             throw new ArgumentException(
                 $"Option {option} requires an integer greater than or equal to {minimum}.");
+        }
+
+        return parsed;
+    }
+
+    private static Guid ReadGuid(string[] args, ref int index, string option)
+    {
+        var value = ReadValue(args, ref index, option);
+        if (!Guid.TryParse(value, out var parsed))
+        {
+            throw new ArgumentException($"Option {option} requires a GUID.");
         }
 
         return parsed;

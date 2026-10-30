@@ -11,8 +11,21 @@ namespace QuickNotes.C6.Harness;
 public sealed class CheckpointFileSink
 {
     private readonly string _directory;
+    private readonly string? _holdMarker;
+    private readonly TimeSpan _holdTimeout;
+    private int _held;
 
-    public CheckpointFileSink(string directory)
+    /// <summary>
+    /// Creates a marker sink. When <paramref name="holdMarker"/> is supplied
+    /// the harness blocks after writing that one marker until the external
+    /// process-kill driver terminates it. The hold is what makes a checkpoint
+    /// kill deterministic instead of racing a fast scenario; it is enabled
+    /// only by the opt-in kill driver and never by normal scenario runs.
+    /// </summary>
+    public CheckpointFileSink(
+        string directory,
+        string? holdMarker = null,
+        TimeSpan? holdTimeout = null)
     {
         if (string.IsNullOrWhiteSpace(directory))
         {
@@ -20,12 +33,23 @@ public sealed class CheckpointFileSink
         }
 
         _directory = Path.GetFullPath(directory);
+        _holdMarker = string.IsNullOrWhiteSpace(holdMarker) ? null : holdMarker;
+        _holdTimeout = holdTimeout ?? TimeSpan.FromMinutes(2);
+        if (_holdTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(holdTimeout),
+                _holdTimeout,
+                "Checkpoint hold timeout must be positive.");
+        }
     }
+
+    public string Directory => _directory;
 
     public void Reached(string name)
     {
         ValidateName(name);
-        Directory.CreateDirectory(_directory);
+        System.IO.Directory.CreateDirectory(_directory);
 
         var target = Path.Combine(_directory, $"{name}.reached");
         var temporary = $"{target}.{Guid.NewGuid():N}.tmp";
@@ -33,6 +57,28 @@ public sealed class CheckpointFileSink
             temporary,
             DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
         File.Move(temporary, target, overwrite: true);
+
+        if (_holdMarker is not null
+            && string.Equals(name, _holdMarker, StringComparison.Ordinal)
+            && Interlocked.Exchange(ref _held, 1) == 0)
+        {
+            HoldForKiller(name);
+        }
+    }
+
+    private void HoldForKiller(string name)
+    {
+        var deadline = DateTime.UtcNow + _holdTimeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            // The external driver watches for <name>.reached and kills the
+            // harness process tree. If no driver arrives the scenario fails
+            // instead of hanging forever.
+            Thread.Sleep(50);
+        }
+
+        throw new TimeoutException(
+            $"The checkpoint '{name}' was not consumed by a process-kill driver within {_holdTimeout}.");
     }
 
     private static void ValidateName(string name)

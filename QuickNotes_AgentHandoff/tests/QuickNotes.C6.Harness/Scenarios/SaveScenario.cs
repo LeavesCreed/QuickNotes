@@ -1,3 +1,4 @@
+using System.Text.Json;
 using QuickNotes.Application;
 using QuickNotes.Domain;
 using QuickNotes.Infrastructure.Drafts;
@@ -39,6 +40,11 @@ public static class SaveScenario
             options.VisibleCount,
             runId,
             cancellationToken).ConfigureAwait(false);
+        await C6HarnessState.WriteReadyAsync(
+            dataRoot,
+            schemaVersion: 2,
+            runId,
+            cancellationToken).ConfigureAwait(false);
 
         var databasePath = Path.Combine(dataRoot, "notes.db");
         var repository = new SqliteNoteRepository(new SqliteConnectionFactory(databasePath));
@@ -70,10 +76,25 @@ public static class SaveScenario
             CapturedAtUtc = DateTimeOffset.UtcNow
         };
 
-        var checkpoint = new CheckpointFileSink(checkpointDirectory);
+        var checkpoint = new CheckpointFileSink(
+            checkpointDirectory,
+            options.KillMarker,
+            holdTimeout: TimeSpan.FromMinutes(2));
+        var checkpointingDraftStore = new CheckpointingNoteDraftStore(draftStore, checkpoint);
+        Directory.CreateDirectory(checkpointDirectory);
+        await File.WriteAllTextAsync(
+                Path.Combine(checkpointDirectory, "save.target.json"),
+                JsonSerializer.Serialize(new
+                {
+                    noteId = note.Id,
+                    baseVersion = note.Version,
+                    operation = "update"
+                }),
+                cancellationToken)
+            .ConfigureAwait(false);
         try
         {
-            await draftStore.SaveAsync(draft, cancellationToken).ConfigureAwait(false);
+            await checkpointingDraftStore.SaveAsync(draft, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is
             DraftStoreException or IOException or UnauthorizedAccessException or NotSupportedException)
@@ -104,12 +125,12 @@ public static class SaveScenario
             };
         }
 
-        checkpoint.Reached("save.after_draft");
         var saveRepository = options.FaultMode == HarnessFaultMode.None
             ? (INoteRepository)repository
             : new FaultingNoteRepository(repository, options.FaultMode);
-        var coordinator = new NoteSaveCoordinator(saveRepository, draftStore);
-        checkpoint.Reached("save.before_commit");
+        var coordinator = new NoteSaveCoordinator(
+            new CheckpointingNoteRepository(saveRepository, checkpoint),
+            checkpointingDraftStore);
 
         SaveResult saveResult;
         try
@@ -147,7 +168,6 @@ public static class SaveScenario
             };
         }
 
-        checkpoint.Reached("save.after_commit");
         var reopened = await ReopenAsync(
             databasePath,
             draftDirectory,

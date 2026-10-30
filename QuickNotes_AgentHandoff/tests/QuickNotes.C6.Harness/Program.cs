@@ -17,9 +17,10 @@ catch (ArgumentException exception)
 namespace QuickNotes.C6.Harness
 {
     /// <summary>
-    /// Task 2 realizes the save and backup bodies. Restore, migrate, and perf
-    /// remain contract-only until Tasks 3-5; those scenarios keep returning
-    /// <see cref="NotImplementedExitCode"/> instead of pretending to run.
+    /// Task 2 realizes the save and backup bodies. Task 3 adds the restore,
+    /// migration, seed, and restart bodies. Perf remains contract-only until
+    /// Task 5 and keeps returning <see cref="NotImplementedExitCode"/> instead
+    /// of pretending to run.
     /// </summary>
     public static class HarnessRunner
     {
@@ -41,6 +42,14 @@ namespace QuickNotes.C6.Harness
                 HarnessScenario.Save => await SaveScenario.RunAsync(options, cancellationToken)
                     .ConfigureAwait(false),
                 HarnessScenario.Backup => await BackupScenario.RunAsync(options, cancellationToken)
+                    .ConfigureAwait(false),
+                HarnessScenario.Restore => await RestoreScenario.RunAsync(options, cancellationToken)
+                    .ConfigureAwait(false),
+                HarnessScenario.Migrate => await MigrationScenario.RunAsync(options, cancellationToken)
+                    .ConfigureAwait(false),
+                HarnessScenario.Seed => await SeedScenario.RunAsync(options, cancellationToken)
+                    .ConfigureAwait(false),
+                HarnessScenario.Restart => await RestartScenario.RunAsync(options, cancellationToken)
                     .ConfigureAwait(false),
                 _ => null
             };

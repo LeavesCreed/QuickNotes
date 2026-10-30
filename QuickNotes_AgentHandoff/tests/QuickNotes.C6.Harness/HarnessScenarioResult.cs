@@ -25,8 +25,10 @@ public sealed record HarnessScenarioResult
     public bool? NoteSaved { get; init; }
     public bool? DatabaseReadable { get; init; }
     public int? NoteCount { get; init; }
+    public int? TotalNoteCount { get; init; }
     public RestartEvidence? Restart { get; init; }
     public BackupScenarioEvidence? Backup { get; init; }
+    public RestartProbeEvidence? RestartProbe { get; init; }
     public string? Message { get; init; }
 }
 
@@ -58,3 +60,46 @@ public sealed record BackupScenarioEvidence
     public string? NewPackageFileName { get; init; }
     public long DurationMilliseconds { get; init; }
 }
+
+/// <summary>
+/// Startup/restart evidence produced by <c>QuickNotes.C6.Harness restart</c>
+/// after a process kill. It reports the real startup assessment, counts, and
+/// recovery artifacts only; note bodies and machine paths are never included.
+/// </summary>
+public sealed record RestartProbeEvidence
+{
+    public required string StartupMode { get; init; }
+    public string? StartupReason { get; init; }
+    public string? ErrorCode { get; init; }
+    public required bool WritesBlocked { get; init; }
+    public required bool DatabaseExists { get; init; }
+    public required bool DatabaseReadable { get; init; }
+    public long? SchemaVersionBeforeStartup { get; init; }
+    public long? SchemaVersionAfterStartup { get; init; }
+    public required int NoteCount { get; init; }
+    public int TotalNoteCount { get; init; }
+    public long? MaxNoteVersion { get; init; }
+    public Guid? TargetNoteId { get; init; }
+    public bool? TargetNoteExists { get; init; }
+    public long? TargetNoteVersion { get; init; }
+    public required int DraftCountBeforeStartup { get; init; }
+    public required int DraftCountAfterStartup { get; init; }
+    /// <summary>
+    /// Draft count observed after startup, not a maximum across the run. A
+    /// startup that removed a draft must never look like a retained draft.
+    /// </summary>
+    public required int DraftCount { get; init; }
+    public string? RestoreJournalStage { get; init; }
+    public required IReadOnlyList<RecoveryArtifactEvidence> RecoveryArtifacts { get; init; }
+    public required IReadOnlyList<BackupPackageEvidence> BackupPackages { get; init; }
+}
+
+public sealed record RecoveryArtifactEvidence(
+    string Kind,
+    string Name,
+    bool IsDirectory);
+
+public sealed record BackupPackageEvidence(
+    string FileName,
+    bool Valid,
+    long SizeBytes);

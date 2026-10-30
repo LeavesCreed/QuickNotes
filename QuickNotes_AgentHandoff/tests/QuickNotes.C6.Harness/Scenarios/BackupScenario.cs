@@ -29,15 +29,24 @@ public static class BackupScenario
             options.BackupDirectory
                 ?? throw new ArgumentException("--backup-dir is required for the backup scenario."),
             nameof(options.BackupDirectory));
-        C6HarnessPaths.RequireUnderRunRoot(
+        var checkpointDirectory = C6HarnessPaths.RequireUnderRunRoot(
             options.CheckpointDirectory
                 ?? throw new ArgumentException("--checkpoint-dir is required for the backup scenario."),
             nameof(options.CheckpointDirectory));
+        var sink = new CheckpointFileSink(
+            checkpointDirectory,
+            options.KillMarker,
+            holdTimeout: TimeSpan.FromMinutes(2));
 
         await SaveScenario.EnsureSeededAsync(
             dataRoot,
             options.NoteCount,
             options.VisibleCount,
+            runId,
+            cancellationToken).ConfigureAwait(false);
+        await C6HarnessState.WriteReadyAsync(
+            dataRoot,
+            schemaVersion: 2,
             runId,
             cancellationToken).ConfigureAwait(false);
         Directory.CreateDirectory(backupDirectory);
@@ -49,6 +58,8 @@ public static class BackupScenario
         {
             packageStore = new FaultingBackupPackageStore(packageStore, options.FaultMode);
         }
+
+        packageStore = new CheckpointingBackupPackageStore(packageStore, sink);
 
         var coordinator = new BackupCoordinator(
             new SqliteSnapshotProvider(databasePath),
