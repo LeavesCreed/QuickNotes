@@ -356,9 +356,10 @@ function New-C6TwoHourSoakCommand {
         [int]$Notes = 1000,
         [int]$Visible = 20,
         [int]$StartupIterations = 10,
-        [int]$UiLaunches = 10,
+        [int]$UiLaunches = 20,
         [int]$ShowHideCycles = 30,
         [int]$SoakSampleSeconds = 60,
+        [int]$SettleSeconds = 30,
         [string]$EvidenceRoot,
         [string]$Timestamp
     )
@@ -411,6 +412,7 @@ function New-C6TwoHourSoakCommand {
         ('-ShowHideCycles ' + $ShowHideCycles),
         ('-DurationMinutes 120'),
         ('-SoakSampleSeconds ' + $SoakSampleSeconds),
+        ('-SettleSeconds ' + $SettleSeconds),
         ('-EvidenceRoot ' + (ConvertTo-C6QuotedArgument -Value $freshEvidenceRoot))
     )
     $envPrefix = '$env:C6_BUDGETS_CONFIRMED=''1''; '

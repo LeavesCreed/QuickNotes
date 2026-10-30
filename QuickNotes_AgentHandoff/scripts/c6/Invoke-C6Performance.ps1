@@ -16,9 +16,17 @@ budgetStatus=unconfirmed and never claims a performance pass.
 
 Confirmed acceptance shape (fail closed):
 - at least 1,000 seeded notes and 20 visible windows;
-- at least 10 fresh host startup iterations and 10 WPF launches;
+- at least 10 fresh host startup iterations and 20 WPF launches;
+- a settle period of at least 30 s after seeding and before UI measurement;
 - the 5-, 10-, and 20-window resource checks must all run;
 - -SkipUi is rejected because it removes a required acceptance item.
+
+Why 20 launches and a settle period: with 10 samples the nearest-rank p95
+equals the maximum, so one cold-cache/antivirus/indexer outlier fails the
+gate. Seeding 1,000 notes immediately before measuring also leaves the fresh
+data root under OS scanning. The settle period lets that work finish; 20
+measured launches give p95 a real tail (rank 19) without changing the 3,000 ms
+threshold. The first launch is still measured, and the maximum is reported.
 
 The 2-hour soak gate requires 121 samples for 7,200 s at a 60 s cadence
 (minimum 120, one boundary sample tolerance), a maximum sample gap of 90 s,
@@ -47,10 +55,11 @@ param(
     [int]$Notes = 1000,
     [int]$Visible = 20,
     [int]$StartupIterations = 10,
-    [int]$UiLaunches = 10,
+    [int]$UiLaunches = 20,
     [int]$ShowHideCycles = 30,
     [int]$DurationMinutes = 0,
     [int]$SoakSampleSeconds = 60,
+    [int]$SettleSeconds = 30,
     [string]$EvidenceRoot,
     [switch]$SkipUi,
     [switch]$SkipSoak
@@ -82,6 +91,10 @@ if ($SoakSampleSeconds -lt 10) {
     throw 'SoakSampleSeconds must be at least 10.'
 }
 
+if ($SettleSeconds -lt 0) {
+    throw 'SettleSeconds must not be negative.'
+}
+
 Assert-C6RunId -RunId $RunId
 $handoffRoot = Get-C6HandoffRoot -ScriptRoot $PSScriptRoot
 $runRoot = Get-C6RunRoot -RunId $RunId
@@ -97,8 +110,8 @@ $budgetConfirmed = [string]$env:C6_BUDGETS_CONFIRMED -eq '1'
 $budgetStatus = if ($budgetConfirmed) { 'confirmed' } else { 'unconfirmed' }
 
 $twoHour = New-C6TwoHourSoakCommand -ScriptRoot $PSScriptRoot -RunId $RunId `
-    -Notes 1000 -Visible 20 -StartupIterations 10 -UiLaunches 10 `
-    -ShowHideCycles 30 -SoakSampleSeconds 60 -EvidenceRoot $evidenceRoot
+    -Notes 1000 -Visible 20 -StartupIterations 10 -UiLaunches 20 `
+    -ShowHideCycles 30 -SoakSampleSeconds 60 -SettleSeconds 30 -EvidenceRoot $evidenceRoot
 $cleanup = [ordered]@{
     runRootRetained = $true
     cleanupCommand = ('pwsh -File scripts/c6/Clear-C6Artifacts.ps1 -RunId ' + $RunId)
@@ -121,12 +134,16 @@ if ($budgetConfirmed) {
         $preflightFailures.Add("StartupIterations must be at least 10 for the confirmed acceptance run (received $StartupIterations).")
     }
 
-    if ($UiLaunches -lt 10) {
-        $preflightFailures.Add("UiLaunches must be at least 10 for the confirmed acceptance run (received $UiLaunches).")
+    if ($UiLaunches -lt 20) {
+        $preflightFailures.Add("UiLaunches must be at least 20 for the confirmed acceptance run (received $UiLaunches).")
+    }
+
+    if ($SettleSeconds -lt 30) {
+        $preflightFailures.Add("SettleSeconds must be at least 30 for the confirmed acceptance run (received $SettleSeconds).")
     }
 
     if ($SkipUi) {
-        $preflightFailures.Add('SkipUi removes the required 10-launch and 5/10/20-window acceptance evidence.')
+        $preflightFailures.Add('SkipUi removes the required 20-launch and 5/10/20-window acceptance evidence.')
     }
 }
 
@@ -136,7 +153,8 @@ if ($preflightFailures.Count -gt 0) {
         notes = [ordered]@{ required = 1000; actual = $Notes; passed = ($Notes -ge 1000) }
         visibleWindows = [ordered]@{ required = 20; actual = $Visible; passed = ($Visible -ge 20) }
         startupIterations = [ordered]@{ required = 10; actual = $StartupIterations; passed = ($StartupIterations -ge 10) }
-        uiLaunches = [ordered]@{ required = 10; actual = $UiLaunches; passed = ($UiLaunches -ge 10) }
+        uiLaunches = [ordered]@{ required = 20; actual = $UiLaunches; passed = ($UiLaunches -ge 20) }
+        settleSeconds = [ordered]@{ required = 30; actual = $SettleSeconds; passed = ($SettleSeconds -ge 30) }
         requiredWindowCounts = @(5, 10, 20)
         observedWindowCounts = @()
         missingWindowCounts = @(5, 10, 20)
@@ -153,6 +171,7 @@ if ($preflightFailures.Count -gt 0) {
         visibleWindows = $Visible
         startupIterations = $StartupIterations
         uiLaunches = $UiLaunches
+        settleSeconds = $SettleSeconds
         acceptance = $preflightAcceptance
         twoHourSoak = [ordered]@{
             status = 'NOT RUN'
@@ -550,7 +569,15 @@ $missingRestoreSizes = @($requiredRestoreSizes | Where-Object { $observedRestore
 $checks.Add((New-C6PerfCheck 'restore_checks' `
     ($restoreFailures.Count + $missingRestoreSizes.Count) 0 'count' $false))
 
-# WPF startup x10, 5/10/20-window resources, and repeated show/hide.
+# Seeding writes a fresh 1,000-note database and drafts. Let OS scanning,
+# indexing, and write-back finish before launching the UI probe; otherwise the
+# measurement window captures that cold work instead of steady-state startup.
+if ($SettleSeconds -gt 0) {
+    Write-Host ("Settling for {0}s before UI measurement..." -f $SettleSeconds)
+    Start-Sleep -Seconds $SettleSeconds
+}
+
+# WPF startup x20, 5/10/20-window resources, and repeated show/hide.
 $uiStatus = 'NOT RUN'
 $uiReason = $null
 $uiLaunchResults = New-Object System.Collections.Generic.List[object]
@@ -960,8 +987,12 @@ if ($StartupIterations -lt 10) {
     $acceptanceFailures.Add("StartupIterations must be at least 10 (received $StartupIterations).")
 }
 
-if ($UiLaunches -lt 10) {
-    $acceptanceFailures.Add("UiLaunches must be at least 10 (received $UiLaunches).")
+if ($UiLaunches -lt 20) {
+    $acceptanceFailures.Add("UiLaunches must be at least 20 (received $UiLaunches).")
+}
+
+if ($SettleSeconds -lt 30) {
+    $acceptanceFailures.Add("SettleSeconds must be at least 30 (received $SettleSeconds).")
 }
 
 if ($SkipUi) {
@@ -986,7 +1017,8 @@ $acceptance = [ordered]@{
     notes = [ordered]@{ required = 1000; actual = $Notes; passed = ($Notes -ge 1000) }
     visibleWindows = [ordered]@{ required = 20; actual = $Visible; passed = ($Visible -ge 20) }
     startupIterations = [ordered]@{ required = 10; actual = $StartupIterations; passed = ($StartupIterations -ge 10) }
-    uiLaunches = [ordered]@{ required = 10; actual = $UiLaunches; passed = ($UiLaunches -ge 10) }
+    uiLaunches = [ordered]@{ required = 20; actual = $UiLaunches; passed = ($UiLaunches -ge 20) }
+    settleSeconds = [ordered]@{ required = 30; actual = $SettleSeconds; passed = ($SettleSeconds -ge 30) }
     requiredWindowCounts = $requiredWindowCounts
     observedWindowCounts = $observedWindowCounts
     missingWindowCounts = $missingWindowCounts
@@ -1101,7 +1133,9 @@ $uiSummary['noteCount'] = $activeNotes
 $uiSummary['expectedNoteCount'] = $activeNotes
 $uiSummary['launches'] = [object[]]$uiLaunchResults.ToArray()
 $uiSummary['readyP95Ms'] = $uiReadyP95
+$uiSummary['readyMaxMs'] = if ($uiReadyValues.Count -gt 0) { ($uiReadyValues | Measure-Object -Maximum).Maximum } else { $null }
 $uiSummary['hostP95Ms'] = $uiHostP95
+$uiSummary['settleSeconds'] = $SettleSeconds
 $uiSummary['windows'] = [object[]]$windowRuns.ToArray()
 $uiSummary['showHide'] = $showHide
 $uiSummary['evidenceFailures'] = [object[]]$uiEvidenceFailureDetails.ToArray()
@@ -1114,6 +1148,7 @@ $actual['notes'] = $Notes
 $actual['visibleWindows'] = $Visible
 $actual['startupIterations'] = $StartupIterations
 $actual['uiLaunches'] = $UiLaunches
+$actual['settleSeconds'] = $SettleSeconds
 $actual['seed'] = [ordered]@{
     requestedNotes = $Notes
     noteCount = $activeNotes

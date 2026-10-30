@@ -19,7 +19,8 @@ public sealed class C6PerformanceScriptTests
         Assert.Contains("Notes -lt 1000", script, StringComparison.Ordinal);
         Assert.Contains("Visible -lt 20", script, StringComparison.Ordinal);
         Assert.Contains("StartupIterations -lt 10", script, StringComparison.Ordinal);
-        Assert.Contains("UiLaunches -lt 10", script, StringComparison.Ordinal);
+        Assert.Contains("UiLaunches -lt 20", script, StringComparison.Ordinal);
+        Assert.Contains("SettleSeconds -lt 30", script, StringComparison.Ordinal);
         Assert.Contains("requiredWindowCounts = @(5, 10, 20)", script, StringComparison.Ordinal);
         Assert.Contains("soak_sample_count_shortfall", script, StringComparison.Ordinal);
         Assert.Contains("soak_cadence_max_gap_seconds", script, StringComparison.Ordinal);
@@ -175,8 +176,8 @@ public sealed class C6PerformanceScriptTests
             "$result = New-C6TwoHourSoakCommand " +
             $"-ScriptRoot {PsQuote(scriptsRoot)} " +
             $"-RunId '{originalRunId}' " +
-            "-Notes 1000 -Visible 20 -StartupIterations 10 -UiLaunches 10 " +
-            "-ShowHideCycles 30 -SoakSampleSeconds 60 " +
+            "-Notes 1000 -Visible 20 -StartupIterations 10 -UiLaunches 20 " +
+            "-ShowHideCycles 30 -SoakSampleSeconds 60 -SettleSeconds 30 " +
             $"-EvidenceRoot {PsQuote(originalEvidence)} " +
             "-Timestamp '20261030-160000000'",
             "$result | ConvertTo-Json -Compress -Depth 5");
@@ -210,9 +211,10 @@ public sealed class C6PerformanceScriptTests
         Assert.Contains("-Notes 1000", generatedCommand, StringComparison.Ordinal);
         Assert.Contains("-Visible 20", generatedCommand, StringComparison.Ordinal);
         Assert.Contains("-StartupIterations 10", generatedCommand, StringComparison.Ordinal);
-        Assert.Contains("-UiLaunches 10", generatedCommand, StringComparison.Ordinal);
+        Assert.Contains("-UiLaunches 20", generatedCommand, StringComparison.Ordinal);
         Assert.Contains("-ShowHideCycles 30", generatedCommand, StringComparison.Ordinal);
         Assert.Contains("-SoakSampleSeconds 60", generatedCommand, StringComparison.Ordinal);
+        Assert.Contains("-SettleSeconds 30", generatedCommand, StringComparison.Ordinal);
         Assert.Contains(
             Path.Combine(scriptsRoot, "Invoke-C6Performance.ps1"),
             generatedCommand,
@@ -239,8 +241,8 @@ public sealed class C6PerformanceScriptTests
             "  $null = New-C6TwoHourSoakCommand " +
             $"-ScriptRoot {PsQuote(ScriptsRoot())} " +
             "-RunId 'c6-task5-fixed-run' -Notes 1000 -Visible 20 " +
-            "-StartupIterations 10 -UiLaunches 10 -ShowHideCycles 30 " +
-            "-SoakSampleSeconds 600 " +
+            "-StartupIterations 10 -UiLaunches 20 -ShowHideCycles 30 " +
+            "-SoakSampleSeconds 600 -SettleSeconds 30 " +
             $"-EvidenceRoot {PsQuote(originalEvidence)}",
             "  'NO_THROW'",
             "}",
@@ -253,6 +255,46 @@ public sealed class C6PerformanceScriptTests
             "60 s sample cadence",
             result.StandardOutput,
             StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ConfirmedTenLaunchShape_FailsClosedWithoutRunningTheProbe()
+    {
+        var runId = NewRunId();
+        var evidenceRoot = Path.Combine(
+            Path.GetTempPath(),
+            "c6-perf-evidence-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var result = RunScriptAllowFailure(
+                "Invoke-C6Performance.ps1",
+                new Dictionary<string, string?>
+                {
+                    ["C6_BUDGETS_CONFIRMED"] = "1"
+                },
+                "-RunId", runId,
+                "-Notes", "1000",
+                "-Visible", "20",
+                "-StartupIterations", "10",
+                "-UiLaunches", "10",
+                "-ShowHideCycles", "0",
+                "-SkipSoak",
+                "-EvidenceRoot", evidenceRoot);
+
+            Assert.NotEqual(0, result.ExitCode);
+            Assert.Equal("FAIL", result.Json.GetProperty("status").GetString());
+            var caseResult = ReadCaseResult(runId, "C6-PERF");
+            var reason = caseResult.GetProperty("reason").GetString();
+            Assert.NotNull(reason);
+            Assert.Contains("UiLaunches must be at least 20", reason, StringComparison.OrdinalIgnoreCase);
+            Assert.False(
+                caseResult.GetProperty("actual").GetProperty("acceptance").GetProperty("passed").GetBoolean());
+        }
+        finally
+        {
+            TryDeleteRunRoot(runId);
+            TryDeleteDirectory(evidenceRoot);
+        }
     }
 
     [Fact]
