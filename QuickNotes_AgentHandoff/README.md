@@ -127,7 +127,7 @@ QuickNotes_AgentHandoff/
 - 技术与范围决策：[ADR 索引](docs/decisions/README.md)
 - 测试证据：[B7 测试报告](docs/agent/B7-测试报告.md)
 - 限制与后续：[B7 已知限制与后续建议](docs/agent/B7-已知限制与后续建议.md)
-- 实施计划：[B7 交付计划](docs/superpowers/plans/2026-10-28-b7-delivery.md)（其余计划在 `docs/superpowers/plans/`）
+- 实施计划：[B7 交付计划](docs/superpowers/plans/2026-10-28-b7-delivery.md)、[C6 故障/性能/稳定性计划](docs/superpowers/plans/2026-10-30-c6-fault-performance-stability.md)（其余计划在 `docs/superpowers/plans/`）
 
 ## 安全与范围说明
 
