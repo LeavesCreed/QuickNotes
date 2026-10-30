@@ -27,6 +27,28 @@ public sealed class C6RecoveryInvariantTests
     private static readonly TimeSpan TestTimeout = TimeSpan.FromMinutes(3);
 
     [Fact]
+    public async Task FailedRollback_PersistsWriteBlockBeforeHarnessEvaluatesScenario()
+    {
+        await using var fixture = await C6RecoveryFixture.CreateBlockedAsync();
+
+        // Negative regression guard for C6-M03: the scenario reads the state
+        // immediately after the coordinator returns and never calls the
+        // harness MarkWritesBlockedAsync helper on this path. If the harness
+        // helper were the only writer, this evidence would be false and the
+        // scenario (plus the fixture assertion) would fail.
+        Assert.Equal("writes_blocked", fixture.RestoreResult.Status);
+        Assert.True(fixture.RestoreResult.Passed);
+        Assert.True(fixture.RestoreResult.WriteBlockPersisted);
+
+        var stateRead = await new ApplicationStateStore(
+                Path.Combine(fixture.DataRoot, "application-state.json"))
+            .ReadAsync();
+        Assert.Equal(ApplicationStateReadStatus.Found, stateRead.Status);
+        Assert.True(stateRead.State!.WritesBlocked);
+        Assert.Equal("restore_rollback_failed", stateRead.State.WriteBlockReason);
+    }
+
+    [Fact]
     public async Task RestartAfterFailedRollback_RemainsWriteBlocked()
     {
         await using var fixture = await C6RecoveryFixture.CreateBlockedAsync();
@@ -339,7 +361,8 @@ internal sealed class C6RecoveryFixture : IAsyncDisposable
         string draftBoundarySha256,
         QuickNotes.Domain.Note staleNote,
         IReadOnlyList<Guid> staleNoteTagIds,
-        long staleNoteVersion)
+        long staleNoteVersion,
+        HarnessScenarioResult restoreResult)
     {
         _temp = temp;
         RunId = runId;
@@ -355,6 +378,7 @@ internal sealed class C6RecoveryFixture : IAsyncDisposable
         StaleNote = staleNote;
         StaleNoteTagIds = staleNoteTagIds;
         StaleNoteVersion = staleNoteVersion;
+        RestoreResult = restoreResult;
     }
 
     public string RunId { get; }
@@ -370,6 +394,7 @@ internal sealed class C6RecoveryFixture : IAsyncDisposable
     public QuickNotes.Domain.Note StaleNote { get; }
     public IReadOnlyList<Guid> StaleNoteTagIds { get; }
     public long StaleNoteVersion { get; }
+    public HarnessScenarioResult RestoreResult { get; }
 
     public string DatabasePath => Path.Combine(DataRoot, "notes.db");
     public string JournalPath => Path.Combine(DataRoot, "recovery-journal.json");
@@ -489,6 +514,29 @@ internal sealed class C6RecoveryFixture : IAsyncDisposable
                     $"({restore.ErrorCode}; {restore.Message}).");
             }
 
+            // C6-M03 must be production evidence. The scenario never re-marks
+            // state on this branch, so passing here means the coordinator's
+            // persistent write gate already recorded the block.
+            if (restore.WriteBlockPersisted != true)
+            {
+                throw new InvalidOperationException(
+                    "The C6 recovery fixture observed a writes-blocked restore that the " +
+                    "production write gate did not persist.");
+            }
+
+            var persistedState = await C6HarnessState.ReadAsync(dataRoot, cancellationToken)
+                .ConfigureAwait(false);
+            if (persistedState?.WritesBlocked != true
+                || !string.Equals(
+                    persistedState.WriteBlockReason,
+                    "restore_rollback_failed",
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "The C6 recovery fixture did not find the production writes-blocked state " +
+                    "with the restore_rollback_failed reason.");
+            }
+
             var journalRead = await new FileRestoreJournalStore(
                     Path.Combine(dataRoot, "recovery-journal.json"))
                 .ReadAsync(cancellationToken);
@@ -530,7 +578,8 @@ internal sealed class C6RecoveryFixture : IAsyncDisposable
                 boundaryHash,
                 note,
                 tagIds,
-                note.Version);
+                note.Version,
+                restore);
         }
         catch
         {

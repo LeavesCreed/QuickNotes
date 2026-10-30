@@ -2,9 +2,11 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using QuickNotes.Application;
 using QuickNotes.C6.Harness;
 using QuickNotes.Desktop.Diagnostics;
 using QuickNotes.Desktop.Hosting;
+using QuickNotes.Desktop.Recovery;
 using QuickNotes.Desktop.SingleInstance;
 using QuickNotes.Desktop.Startup;
 
@@ -250,6 +252,96 @@ public sealed class C6SecondInstanceTests
         Assert.Contains("--pause-seconds", exception.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task PauseTimeout_ReportsDistinctFailureAndNeverPassesAsWritesBlocked()
+    {
+        using var temp = new C6TemporaryDirectory();
+        var runId = Path.GetFileName(temp.RootPath);
+        var dataRoot = Path.Combine(temp.RootPath, "data");
+        var sourceRoot = Path.Combine(temp.RootPath, "source");
+        var backupDirectory = Path.Combine(temp.RootPath, "backups");
+        var checkpointDirectory = Path.Combine(temp.RootPath, "checkpoints");
+        var setupCheckpoints = Path.Combine(temp.RootPath, "setup-checkpoints");
+        await SeedScenario.RunAsync(HarnessOptions.Parse(new[]
+        {
+            "seed", "--data-root", dataRoot, "--notes", "12", "--visible", "2", "--run-id", runId
+        }), CancellationToken.None).WaitAsync(TestTimeout);
+        await SeedScenario.RunAsync(HarnessOptions.Parse(new[]
+        {
+            "seed", "--data-root", sourceRoot, "--notes", "5", "--visible", "1", "--run-id", runId
+        }), CancellationToken.None).WaitAsync(TestTimeout);
+        var backup = await BackupScenario.RunAsync(HarnessOptions.Parse(new[]
+        {
+            "backup",
+            "--data-root", sourceRoot,
+            "--backup-dir", backupDirectory,
+            "--checkpoint-dir", setupCheckpoints,
+            "--run-id", runId,
+            "--notes", "5",
+            "--visible", "1"
+        }), CancellationToken.None).WaitAsync(TestTimeout);
+        Assert.True(backup.Passed);
+        var packagePath = Path.Combine(backupDirectory, backup.Backup!.NewPackageFileName!);
+
+        var timedOut = await RestoreScenario.RunAsync(HarnessOptions.Parse(new[]
+        {
+            "restore",
+            "--data-root", dataRoot,
+            "--backup-dir", backupDirectory,
+            "--package", packagePath,
+            "--checkpoint-dir", checkpointDirectory,
+            "--run-id", runId,
+            "--notes", "12",
+            "--visible", "2",
+            "--pause-at", CheckpointNames.RestoreBeforeSwitch,
+            "--pause-seconds", "1"
+        }), CancellationToken.None).WaitAsync(TestTimeout);
+
+        Assert.False(timedOut.Passed);
+        Assert.NotEqual("writes_blocked", timedOut.Status);
+        Assert.NotEqual("ok", timedOut.Status);
+        Assert.Equal("pause_timeout", timedOut.Status);
+        Assert.Equal("pause", timedOut.FailureStage);
+        Assert.Equal("pause_timeout", timedOut.ErrorCode);
+        Assert.NotNull(timedOut.Pause);
+        Assert.True(timedOut.Pause!.MarkerWritten);
+        Assert.False(timedOut.Pause.Released);
+        Assert.True(timedOut.Pause.TimedOut);
+        // Fail-closed production behavior: the timeout still blocks writes,
+        // but that must not turn the scenario into a passing outcome.
+        Assert.True(timedOut.WritesBlocked);
+        Assert.True(timedOut.WriteBlockPersisted);
+        Assert.True(timedOut.DatabaseReadable);
+        Assert.Equal(12, timedOut.TotalNoteCount);
+        var journal = await new FileRestoreJournalStore(
+                Path.Combine(dataRoot, "recovery-journal.json"))
+            .ReadAsync();
+        Assert.Equal(RestoreJournalReadStatus.Found, journal.Status);
+        Assert.Equal(RestoreStage.Failed, journal.Journal!.Stage);
+    }
+
+    [C6OptInProcessFact]
+    public async Task RunAsync_KillsTimedOutHarnessChild()
+    {
+        using var temp = new C6TemporaryDirectory();
+        var runId = Path.GetFileName(temp.RootPath);
+        using var child = C6ExternalHarness.Start(new[]
+        {
+            "save",
+            "--data-root", Path.Combine(temp.RootPath, "data"),
+            "--checkpoint-dir", Path.Combine(temp.RootPath, "checkpoints"),
+            "--run-id", runId,
+            "--notes", "1",
+            "--visible", "1",
+            "--kill-marker", CheckpointNames.SaveBeforeCommit
+        });
+
+        await Assert.ThrowsAsync<TimeoutException>(
+            () => C6ExternalHarness.AwaitResultAsync(child, TimeSpan.FromSeconds(1)));
+        await ProcessHarness.WaitForExitAsync(child, TimeSpan.FromSeconds(10));
+        Assert.True(child.HasExited);
+    }
+
     [C6OptInProcessFact]
     public async Task PausedRestore_SecondInstanceActivatesWithoutCompetingWrite()
     {
@@ -309,6 +401,12 @@ public sealed class C6SecondInstanceTests
             var databasePath = Path.Combine(dataRoot, "notes.db");
             var statePath = Path.Combine(dataRoot, "application-state.json");
             var journalPath = Path.Combine(dataRoot, "recovery-journal.json");
+            // The pause provably happens after the harness-written journal
+            // reached Switching and before the real database switch.
+            var pausedJournal = await new FileRestoreJournalStore(journalPath).ReadAsync();
+            Assert.Equal(RestoreJournalReadStatus.Found, pausedJournal.Status);
+            Assert.Equal(RestoreStage.Switching, pausedJournal.Journal!.Stage);
+            Assert.False(pausedJournal.Journal.IsTerminal);
             var databaseHash = await C6RecoveryFixture.Sha256Async(databasePath);
             var stateHash = await C6RecoveryFixture.Sha256Async(statePath);
             var journalHash = await C6RecoveryFixture.Sha256Async(journalPath);
@@ -452,9 +550,51 @@ internal static class C6ExternalHarness
         TimeSpan timeout)
     {
         using var process = Start(arguments);
-        await ProcessHarness.WaitForExitAsync(process, timeout);
-        var stdout = await process.StandardOutput.ReadToEndAsync();
-        var stderr = await process.StandardError.ReadToEndAsync();
+        return await AwaitResultAsync(process, timeout).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Waits for a harness process this test started and returns its JSON
+    /// result. A timeout kills the child process tree before the
+    /// <see cref="TimeoutException"/> escapes, so a stuck pause/checkpoint can
+    /// never leave an external harness running after the test fails.
+    /// </summary>
+    internal static async Task<C6ExternalResult> AwaitResultAsync(
+        Process process,
+        TimeSpan timeout)
+    {
+        ArgumentNullException.ThrowIfNull(process);
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        try
+        {
+            await ProcessHarness.WaitForExitAsync(process, timeout);
+        }
+        catch (TimeoutException)
+        {
+            ProcessHarness.KillProcessTree(process);
+            try
+            {
+                await ProcessHarness.WaitForExitAsync(process, TimeSpan.FromSeconds(10));
+            }
+            catch (TimeoutException)
+            {
+            }
+
+            try
+            {
+                await Task.WhenAll(stdoutTask, stderrTask)
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            catch (TimeoutException)
+            {
+            }
+
+            throw;
+        }
+
+        var stdout = await stdoutTask;
+        var stderr = await stderrTask;
         return new C6ExternalResult(
             process.ExitCode,
             stdout,

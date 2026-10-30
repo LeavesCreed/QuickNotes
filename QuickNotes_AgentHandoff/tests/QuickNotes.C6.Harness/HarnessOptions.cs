@@ -75,9 +75,12 @@ public sealed record HarnessOptions
 
     /// <summary>
     /// Restore-only pause checkpoint used by the Task 4 second-instance case.
-    /// The scenario writes the marker, then waits for the release file (or the
-    /// pause timeout) before continuing, so another process can start while the
-    /// restore is provably between its journal write and the database switch.
+    /// The scenario writes the marker, keeps the harness-written journal (in
+    /// production format) at <c>Switching</c>, then waits for the release file
+    /// (or the pause timeout) before continuing, so another process can start
+    /// while the restore is provably between its journal write and the database
+    /// switch. A timeout is reported as a distinct failing <c>pause_timeout</c>
+    /// result.
     /// </summary>
     public string? PauseAt { get; init; }
 

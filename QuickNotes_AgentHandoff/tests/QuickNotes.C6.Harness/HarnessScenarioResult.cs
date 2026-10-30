@@ -31,6 +31,14 @@ public sealed record HarnessScenarioResult
     public RestartProbeEvidence? RestartProbe { get; init; }
     public RestoreStatus? RestoreStatus { get; init; }
     public bool? WritesBlocked { get; init; }
+    /// <summary>
+    /// True only when the production persistent write gate had already
+    /// persisted <c>WritesBlocked</c> when the restore coordinator returned.
+    /// The harness never re-marks state for the C6-M03 writes-blocked branch,
+    /// so a false/null value is a real persistence failure rather than a
+    /// harness bookkeeping gap.
+    /// </summary>
+    public bool? WriteBlockPersisted { get; init; }
     public bool? RolledBack { get; init; }
     public InstanceEvidence? Instance { get; init; }
     public RestorePauseEvidence? Pause { get; init; }
@@ -51,13 +59,16 @@ public sealed record InstanceEvidence
 /// <summary>
 /// Bounded pause at a restore checkpoint. The marker is written before the
 /// pause starts; <see cref="Released"/> is true only when the release file was
-/// observed before the timeout.
+/// observed before the timeout, and <see cref="TimedOut"/> is true only when
+/// the pause expired without a release. A timed-out pause must be reported as a
+/// failure, never as a successful restore outcome.
 /// </summary>
 public sealed record RestorePauseEvidence
 {
     public required string Checkpoint { get; init; }
     public required bool MarkerWritten { get; init; }
     public required bool Released { get; init; }
+    public bool TimedOut { get; init; }
     public long WaitMilliseconds { get; init; }
 }
 

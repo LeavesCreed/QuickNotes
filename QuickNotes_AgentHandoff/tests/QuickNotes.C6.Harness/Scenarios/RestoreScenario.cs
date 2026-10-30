@@ -13,19 +13,21 @@ namespace QuickNotes.C6.Harness;
 /// Real restore scenario used by C6-K05/K06/K07 and the Task 4 competition
 /// cases. The extraction, protection snapshot, migration, switch, and rollback
 /// all run through the production restore services. Only the checkpoint
-/// markers, the restore journal writer (the desktop host already reads this
-/// exact journal format at startup), the optional pause/single-instance
-/// competition composition, and the optional post-switch/rollback faults are
-/// C6 test composition.
+/// markers, the harness-written journal (in the production journal format that
+/// the desktop host already reads at startup), the optional pause/single-
+/// instance competition composition, and the optional post-switch/rollback
+/// faults are C6 test composition.
 ///
 /// <para>
 /// <c>--single-instance</c> acquires the real production single-instance lock
 /// and activation pipe for the disposable data root and holds them for the
 /// whole restore. <c>--pause-at restore.before_switch</c> writes the checkpoint
-/// marker, keeps the production journal at <c>Switching</c>, and waits for a
-/// release file so another process can be started while the switch has
-/// provably not happened. <c>--fault-rollback</c> drives the real coordinator
-/// through a failed rollback into the persisted writes-blocked state.
+/// marker, keeps the harness-written journal (production format) at
+/// <c>Switching</c>, and waits for a release file so another process can be
+/// started while the switch has provably not happened. A pause timeout is
+/// reported as the distinct <c>pause_timeout</c> failure, never as a passing
+/// restore. <c>--fault-rollback</c> drives the real coordinator through a
+/// failed rollback into the persisted writes-blocked state.
 /// </para>
 /// </summary>
 public static class RestoreScenario
@@ -215,6 +217,10 @@ public static class RestoreScenario
             await journalRecorder
                 .RecordTerminalAsync(RestoreStage.Failed, protectionSnapshotPath: null, rollbackPath: null)
                 .ConfigureAwait(false);
+            // Fail-closed harness state for an exception that is not C6-M03
+            // evidence: the restart probe must not observe a stale ready state.
+            // The writes-blocked C6-M03 branch below deliberately never re-marks
+            // state; it requires the production write gate to have persisted it.
             await C6HarnessState
                 .MarkWritesBlockedAsync(dataRoot, "restore_exception", cancellationToken)
                 .ConfigureAwait(false);
@@ -249,60 +255,83 @@ public static class RestoreScenario
                 .ConfigureAwait(false);
         }
 
-        if (result.WritesBlocked)
-        {
-            await C6HarnessState
-                .MarkWritesBlockedAsync(dataRoot, "restore_rollback_failed", cancellationToken)
-                .ConfigureAwait(false);
-        }
-
         var restored = await InspectAsync(databasePath, cancellationToken).ConfigureAwait(false);
         var readable = restored is not null;
         var total = readable ? Total(restored!) : 0;
+        // C6-M03 evidence belongs to the production persistent write gate.
+        // Do not call C6HarnessState.MarkWritesBlockedAsync on this path: that
+        // would turn the restart invariant into a harness self-assertion. The
+        // state is read here and the scenario fails if the gate did not already
+        // persist the block when the coordinator returned.
         var stateAfter = await C6HarnessState.ReadAsync(dataRoot, cancellationToken)
             .ConfigureAwait(false);
-        var success = result.Status == RestoreStatus.Succeeded
+        var writeBlockPersisted = result.WritesBlocked && stateAfter?.WritesBlocked == true;
+        var pauseTimedOut = pauseStore?.Evidence.TimedOut == true;
+        var success = !pauseTimedOut
+            && result.Status == RestoreStatus.Succeeded
             && readable
             && restored!.SchemaVersion == RestoreCoordinator.SupportedSchemaVersion
             && total > 0;
-        var rollbackObserved = result.Status == RestoreStatus.SwitchFailed
+        var rollbackObserved = !pauseTimedOut
+            && result.Status == RestoreStatus.SwitchFailed
             && result.RolledBack
             && readable
             && total > 0;
-        var writesBlockedObserved = result.Status == RestoreStatus.RollbackFailed
+        var writesBlockedObserved = !pauseTimedOut
+            && result.Status == RestoreStatus.RollbackFailed
             && result.WritesBlocked
-            && stateAfter?.WritesBlocked == true
+            && writeBlockPersisted
             && readable
             && total > 0;
+        var writeBlockMissing = result.WritesBlocked && !writeBlockPersisted;
         var passed = success || rollbackObserved || writesBlockedObserved;
         var pauseEvidence = pauseStore?.Evidence;
         return new RestoreOutcome(new HarnessScenarioResult
         {
             Scenario = "restore",
-            Status = success
-                ? "ok"
-                : rollbackObserved
-                    ? "rollback_observed"
-                    : writesBlockedObserved
-                        ? "writes_blocked"
-                        : "unexpected_result",
+            Status = pauseTimedOut
+                ? "pause_timeout"
+                : success
+                    ? "ok"
+                    : rollbackObserved
+                        ? "rollback_observed"
+                        : writesBlockedObserved
+                            ? "writes_blocked"
+                            : writeBlockMissing
+                                ? "write_gate_not_persisted"
+                                : "unexpected_result",
             Passed = passed,
-            FailureStage = passed ? null : "restore",
-            ErrorCode = result.Error?.Code.ToString(),
+            FailureStage = passed
+                ? null
+                : pauseTimedOut
+                    ? "pause"
+                    : writeBlockMissing
+                        ? "persistence"
+                        : "restore",
+            ErrorCode = pauseTimedOut
+                ? "pause_timeout"
+                : writeBlockMissing
+                    ? "production_write_gate_not_persisted"
+                    : result.Error?.Code.ToString(),
             RestoreStatus = result.Status,
             WritesBlocked = result.WritesBlocked,
+            WriteBlockPersisted = result.WritesBlocked ? writeBlockPersisted : null,
             RolledBack = result.RolledBack,
             DatabaseReadable = readable,
             NoteCount = readable ? checked((int)restored!.Counts.ActiveNotes) : null,
             TotalNoteCount = readable ? total : null,
             Pause = pauseEvidence,
-            Message = success
-                ? "The real restore switched and verified the package database."
-                : rollbackObserved
-                    ? "The restore failed post-switch verification and the previous database was rolled back."
-                    : writesBlockedObserved
-                        ? "The restore rollback failed; writes are blocked and recovery evidence was retained."
-                        : "The restore did not match the expected safe outcome."
+            Message = pauseTimedOut
+                ? "The restore pause checkpoint timed out before release; the restore did not complete."
+                : success
+                    ? "The real restore switched and verified the package database."
+                    : rollbackObserved
+                        ? "The restore failed post-switch verification and the previous database was rolled back."
+                        : writesBlockedObserved
+                            ? "The restore rollback failed; writes are blocked and recovery evidence was retained."
+                            : writeBlockMissing
+                                ? "The restore reported writes blocked but the production write gate did not persist the block."
+                                : "The restore did not match the expected safe outcome."
         }, pauseEvidence);
     }
 
@@ -416,10 +445,12 @@ public static class RestoreScenario
         RestorePauseEvidence? Pause);
 
     /// <summary>
-    /// Holds the restore between the production journal's <c>Switching</c>
-    /// write and the actual database switch. The checkpoint marker is visible
-    /// before the pause, and the release file ends it early; a missing release
-    /// fails the scenario instead of hanging forever.
+    /// Holds the restore between the harness-written journal's <c>Switching</c>
+    /// record and the actual database switch. The checkpoint marker is visible
+    /// before the pause, and the release file ends it early. A missing release
+    /// marks <see cref="RestorePauseEvidence.TimedOut"/> and throws so the
+    /// scenario can report a distinct <c>pause_timeout</c> failure instead of a
+    /// passing restore.
     /// </summary>
     private sealed class PausingRestoreStore : IRestoreStore
     {
@@ -430,6 +461,7 @@ public static class RestoreScenario
         private readonly TimeSpan _timeout;
         private bool _markerWritten;
         private bool _released;
+        private bool _timedOut;
         private long _waitMilliseconds;
 
         public PausingRestoreStore(
@@ -455,6 +487,7 @@ public static class RestoreScenario
             Checkpoint = _checkpoint,
             MarkerWritten = _markerWritten,
             Released = _released,
+            TimedOut = _timedOut,
             WaitMilliseconds = Interlocked.Read(ref _waitMilliseconds)
         };
 
@@ -488,6 +521,10 @@ public static class RestoreScenario
                 await Task.Delay(50, cancellationToken).ConfigureAwait(false);
             }
 
+            _timedOut = true;
+            Interlocked.Exchange(
+                ref _waitMilliseconds,
+                (long)System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
             throw new TimeoutException(
                 $"The pause checkpoint '{_checkpoint}' was not released within {_timeout}.");
         }
@@ -520,10 +557,11 @@ public static class RestoreScenario
     }
 
     /// <summary>
-    /// Maintains a journal in the production <see cref="RestoreJournal"/>
-    /// format. The desktop startup coordinator already reads this file; writing
-    /// it here lets the restart probe observe a real interrupted-restore state
-    /// after the harness process is killed.
+    /// Harness-authored journal written in the production
+    /// <see cref="RestoreJournal"/> format. The production coordinator does not
+    /// write this file; the harness persists it so the desktop startup
+    /// coordinator can observe a real interrupted-restore state after this
+    /// process is killed.
     /// </summary>
     private sealed class RestoreJournalRecorder
     {
