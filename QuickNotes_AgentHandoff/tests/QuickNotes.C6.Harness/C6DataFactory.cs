@@ -15,6 +15,21 @@ public static class C6DataFactory
 {
     public const string SyntheticBodyMarker = "C6-SYNTHETIC";
 
+    /// <summary>
+    /// Directory segment every disposable C6 data root must live under, e.g.
+    /// <c>%TEMP%\QuickNotes-C6\&lt;runId&gt;</c>. The factory refuses to seed
+    /// any root outside that area so a mistyped path cannot fill a real data
+    /// directory with synthetic notes.
+    /// </summary>
+    public const string RunRootSegment = "QuickNotes-C6";
+
+    /// <summary>
+    /// Run ID used by the four-argument overload. Tests that need to verify a
+    /// concrete run ID must call the overload that takes one explicitly; C6
+    /// evidence runs must always pass the real Harness run ID.
+    /// </summary>
+    public const string DefaultTestRunId = "c6-test-fixture";
+
     private const int CategoryIdKind = 1;
     private const int TagIdKind = 2;
     private const int NoteIdKind = 3;
@@ -44,11 +59,27 @@ public static class C6DataFactory
     /// <see cref="NoteDisplayIntent.Visible"/> windows. The remaining history
     /// carries a fixed category, tag, lifecycle, appearance, and pin
     /// distribution so performance and restart probes are reproducible.
+    /// This overload tags bodies with <see cref="DefaultTestRunId"/>; C6
+    /// evidence runs must use the overload that takes the real run ID.
+    /// </summary>
+    public static Task<SeedResult> SeedAsync(
+        string dataRoot,
+        int notes,
+        int visible,
+        CancellationToken cancellationToken = default) =>
+        SeedAsync(dataRoot, notes, visible, DefaultTestRunId, cancellationToken);
+
+    /// <summary>
+    /// Seeds the same fixed distribution and embeds <paramref name="runId"/>
+    /// in every note body so C6 recovery evidence can prove that the note it
+    /// found was produced by this run. The body stays synthetic and never
+    /// contains the data root or other machine paths.
     /// </summary>
     public static async Task<SeedResult> SeedAsync(
         string dataRoot,
         int notes,
         int visible,
+        string runId,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(dataRoot))
@@ -72,7 +103,13 @@ public static class C6DataFactory
                 "Visible note count must be between 0 and the note count.");
         }
 
+        if (string.IsNullOrWhiteSpace(runId))
+        {
+            throw new ArgumentException("C6 run ID must not be empty.", nameof(runId));
+        }
+
         var fullDataRoot = Path.GetFullPath(dataRoot);
+        EnsureC6RunRoot(fullDataRoot, runId);
         var databasePath = Path.Combine(fullDataRoot, "notes.db");
         if (File.Exists(databasePath))
         {
@@ -124,7 +161,7 @@ public static class C6DataFactory
         {
             cancellationToken.ThrowIfCancellationRequested();
             var isVisible = index < visible;
-            var note = CreateNote(index, isVisible, categoryIds);
+            var note = CreateNote(index, isVisible, categoryIds, runId);
             await noteRepository.CreateAsync(
                 note,
                 SelectTagIds(index, tagIds),
@@ -152,17 +189,44 @@ public static class C6DataFactory
         return new SeedResult(noteIds.AsReadOnly(), visibleNoteIds.AsReadOnly());
     }
 
+    /// <summary>
+    /// Refuses to seed anything that is not clearly a disposable C6 root.
+    /// A root is accepted when any segment is <see cref="RunRootSegment"/>
+    /// (for example <c>%TEMP%\QuickNotes-C6\&lt;guid&gt;</c>) or when its leaf
+    /// is exactly the explicit run ID (for example <c>%TEMP%\&lt;guid&gt;</c>
+    /// seeded with that GUID as the run ID). This keeps synthetic seeding
+    /// away from real user data directories.
+    /// </summary>
+    private static void EnsureC6RunRoot(string fullDataRoot, string runId)
+    {
+        var segments = fullDataRoot.Split(
+            new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+            StringSplitOptions.RemoveEmptyEntries);
+        var underC6Root = Array.Exists(
+            segments,
+            segment => string.Equals(segment, RunRootSegment, StringComparison.OrdinalIgnoreCase));
+        var runIdDerivedRoot = segments.Length > 0
+            && string.Equals(segments[^1], runId, StringComparison.Ordinal);
+        if (!underC6Root && !runIdDerivedRoot)
+        {
+            throw new ArgumentException(
+                $"The C6 data root must contain a '{RunRootSegment}' directory segment or end with the run ID so real data cannot be seeded. Received '{fullDataRoot}'.",
+                "dataRoot");
+        }
+    }
+
     private static Note CreateNote(
         int index,
         bool isVisible,
-        IReadOnlyList<Guid> categoryIds)
+        IReadOnlyList<Guid> categoryIds,
+        string runId)
     {
         var modifiedAtUtc = TimestampBase.AddMinutes(index * 17L);
         return new Note
         {
             Id = DeterministicId(NoteIdKind, index),
             Title = $"C6 synthetic note {index:D4}",
-            Body = $"{SyntheticBodyMarker} body {index:D4}",
+            Body = $"{SyntheticBodyMarker} run={runId} body {index:D4}",
             CreatedAtUtc = modifiedAtUtc.AddSeconds(-(index % 60)),
             ModifiedAtUtc = modifiedAtUtc,
             Lifecycle = NoteLifecycle.Active,

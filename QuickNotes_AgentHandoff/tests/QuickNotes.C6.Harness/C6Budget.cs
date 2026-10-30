@@ -5,9 +5,18 @@ namespace QuickNotes.C6.Harness;
 /// Task 5; they are not user-approved acceptance criteria. Until the user
 /// confirms them (or explicitly accepts a baseline-only run), the C6 harness
 /// must report <see cref="ApprovalStatus"/> and must not claim a performance pass.
+/// Task 5 must gate comparisons on <see cref="ConfirmationEnvironmentVariable"/>
+/// being set to "1" by the user; Task 1 never sets or reads it.
 /// </summary>
 public static class C6Budget
 {
+    /// <summary>
+    /// Environment variable Task 5's perf gate must check. Any other value
+    /// (including unset) means baseline-only: emit raw metrics with
+    /// budgetStatus=unconfirmed and never claim a pass.
+    /// </summary>
+    public const string ConfirmationEnvironmentVariable = "C6_BUDGETS_CONFIRMED";
+
     public const string ApprovalStatus = "candidate-unconfirmed";
     public const bool RequiresUserConfirmation = true;
 

@@ -29,4 +29,13 @@ public sealed class C6BudgetTests
         Assert.Equal("candidate-unconfirmed", C6Budget.ApprovalStatus);
         Assert.True(C6Budget.RequiresUserConfirmation);
     }
+
+    [Fact]
+    public void Budget_TaskFiveGateRequiresTheExplicitEnvironmentConfirmation()
+    {
+        // Task 5 must check this env var before comparing metrics against the
+        // candidates; Task 1 keeps the budgets unconfirmed and never sets it.
+        Assert.Equal("C6_BUDGETS_CONFIRMED", C6Budget.ConfirmationEnvironmentVariable);
+        Assert.NotEqual("confirmed", C6Budget.ApprovalStatus);
+    }
 }

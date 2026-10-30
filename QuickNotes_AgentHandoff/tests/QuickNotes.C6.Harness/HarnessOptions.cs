@@ -14,13 +14,15 @@ public enum HarnessScenario
 /// <summary>
 /// Parsed C6 harness command line. This is the CLI contract shared with the
 /// PowerShell drivers; scenario execution is added by Tasks 2-5.
+/// <see cref="CheckpointDirectory"/> is null for the documented perf form,
+/// which has no checkpoint because it does not inject a fault.
 /// </summary>
 public sealed record HarnessOptions
 {
     public required HarnessScenario Scenario { get; init; }
     public required string DataRoot { get; init; }
     public string? BackupDirectory { get; init; }
-    public required string CheckpointDirectory { get; init; }
+    public string? CheckpointDirectory { get; init; }
     public int NoteCount { get; init; } = C6Budget.HistoricalNotes;
     public int VisibleCount { get; init; } = C6Budget.VisibleWindows;
     public string? PackagePath { get; init; }
@@ -94,7 +96,7 @@ public sealed record HarnessOptions
             Scenario = scenario,
             DataRoot = Required(dataRoot, "--data-root"),
             BackupDirectory = backupDirectory,
-            CheckpointDirectory = Required(checkpointDirectory, "--checkpoint-dir"),
+            CheckpointDirectory = checkpointDirectory,
             NoteCount = noteCount,
             VisibleCount = visibleCount,
             PackagePath = packagePath,
@@ -122,6 +124,16 @@ public sealed record HarnessOptions
         if (VisibleCount > NoteCount)
         {
             throw new ArgumentException("--visible must not exceed --notes.");
+        }
+
+        if (Scenario != HarnessScenario.Perf
+            && string.IsNullOrWhiteSpace(CheckpointDirectory))
+        {
+            // Fault-injection scenarios write checkpoint markers so the
+            // external kill driver can stop the harness at a stage. perf does
+            // not inject faults and its documented form has no checkpoint dir.
+            throw new ArgumentException(
+                $"--checkpoint-dir is required for the {ToCliName(Scenario)} scenario.");
         }
 
         if (Scenario is HarnessScenario.Backup or HarnessScenario.Restore
