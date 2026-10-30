@@ -30,6 +30,78 @@ public sealed class HarnessOptionsTests
         Assert.Equal(1000, options.NoteCount);
         Assert.Equal(C6Budget.VisibleWindows, options.VisibleCount);
         Assert.Null(options.BackupDirectory);
+        Assert.Null(options.RunId);
+        Assert.Null(options.DraftDirectory);
+        Assert.False(options.FaultDiskFull);
+        Assert.False(options.FaultOffline);
+        Assert.Equal(HarnessFaultMode.None, options.FaultMode);
+    }
+
+    [Fact]
+    public void Parse_AcceptsSaveFaultFlagsAndRunIdentity()
+    {
+        var options = HarnessOptions.Parse(new[]
+        {
+            "save", "--data-root", DataRoot, "--checkpoint-dir", CheckpointDirectory,
+            "--run-id", "c6-run-42", "--draft-dir", @"C:\QuickNotes-C6\run-0001\drafts",
+            "--fault-disk-full"
+        });
+
+        Assert.Equal("c6-run-42", options.RunId);
+        Assert.Equal(@"C:\QuickNotes-C6\run-0001\drafts", options.DraftDirectory);
+        Assert.True(options.FaultDiskFull);
+        Assert.False(options.FaultOffline);
+        Assert.Equal(HarnessFaultMode.DiskFull, options.FaultMode);
+    }
+
+    [Fact]
+    public void Parse_AcceptsBackupOfflineFault()
+    {
+        var options = HarnessOptions.Parse(new[]
+        {
+            "backup", "--data-root", DataRoot, "--backup-dir", BackupDirectory,
+            "--checkpoint-dir", CheckpointDirectory, "--fault-offline"
+        });
+
+        Assert.True(options.FaultOffline);
+        Assert.False(options.FaultDiskFull);
+        Assert.Equal(HarnessFaultMode.Offline, options.FaultMode);
+    }
+
+    [Theory]
+    [InlineData("save", "--fault-offline")]
+    [InlineData("backup", "--fault-disk-full")]
+    public void Parse_RejectsAFaultFlagOnTheWrongScenario(string scenario, string flag)
+    {
+        var args = new List<string>
+        {
+            scenario, "--data-root", DataRoot, "--checkpoint-dir", CheckpointDirectory
+        };
+        if (scenario == "backup")
+        {
+            args.Add("--backup-dir");
+            args.Add(BackupDirectory);
+        }
+
+        args.Add(flag);
+
+        var exception = Assert.Throws<ArgumentException>(() => HarnessOptions.Parse(args.ToArray()));
+
+        Assert.Contains(flag, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Parse_RejectsMutuallyExclusiveFaultFlags()
+    {
+        var exception = Assert.Throws<ArgumentException>(
+            () => HarnessOptions.Parse(new[]
+            {
+                "save", "--data-root", DataRoot, "--checkpoint-dir", CheckpointDirectory,
+                "--fault-disk-full", "--fault-offline"
+            }));
+
+        Assert.Contains("--fault-disk-full", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("--fault-offline", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

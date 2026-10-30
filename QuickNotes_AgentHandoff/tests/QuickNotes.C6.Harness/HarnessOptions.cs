@@ -30,6 +30,29 @@ public sealed record HarnessOptions
     public int Iterations { get; init; } = 30;
     public string? OutputPath { get; init; }
 
+    /// <summary>
+    /// C6 run identity embedded in synthetic note bodies. It is optional in
+    /// the parser so existing unit-level forms stay valid, but every evidence
+    /// run must pass the same ID the PowerShell driver uses for cleanup.
+    /// </summary>
+    public string? RunId { get; init; }
+
+    /// <summary>
+    /// Draft directory for the save scenario. It defaults to
+    /// <c>&lt;data-root&gt;\drafts</c>. The fault driver can place drafts on a
+    /// different volume so a full data volume still leaves a recoverable
+    /// draft behind.
+    /// </summary>
+    public string? DraftDirectory { get; init; }
+
+    public bool FaultDiskFull { get; init; }
+    public bool FaultOffline { get; init; }
+
+    public HarnessFaultMode FaultMode =>
+        FaultDiskFull ? HarnessFaultMode.DiskFull
+        : FaultOffline ? HarnessFaultMode.Offline
+        : HarnessFaultMode.None;
+
     public static HarnessOptions Parse(string[] args)
     {
         ArgumentNullException.ThrowIfNull(args);
@@ -50,6 +73,10 @@ public sealed record HarnessOptions
         string? checkpointDirectory = null;
         string? packagePath = null;
         string? outputPath = null;
+        string? runId = null;
+        string? draftDirectory = null;
+        var faultDiskFull = false;
+        var faultOffline = false;
         var noteCount = C6Budget.HistoricalNotes;
         var visibleCount = C6Budget.VisibleWindows;
         var sourceSchema = 1;
@@ -86,6 +113,18 @@ public sealed record HarnessOptions
                 case "--output":
                     outputPath = ReadValue(args, ref index, "--output");
                     break;
+                case "--run-id":
+                    runId = ReadValue(args, ref index, "--run-id");
+                    break;
+                case "--draft-dir":
+                    draftDirectory = ReadValue(args, ref index, "--draft-dir");
+                    break;
+                case "--fault-disk-full":
+                    faultDiskFull = true;
+                    break;
+                case "--fault-offline":
+                    faultOffline = true;
+                    break;
                 default:
                     throw new ArgumentException($"Unknown option '{args[index]}'.");
             }
@@ -102,7 +141,11 @@ public sealed record HarnessOptions
             PackagePath = packagePath,
             SourceSchema = sourceSchema,
             Iterations = iterations,
-            OutputPath = outputPath
+            OutputPath = outputPath,
+            RunId = runId,
+            DraftDirectory = draftDirectory,
+            FaultDiskFull = faultDiskFull,
+            FaultOffline = faultOffline
         };
         parsed.Validate();
         return parsed;
@@ -150,6 +193,34 @@ public sealed record HarnessOptions
         if (SourceSchema != 1)
         {
             throw new ArgumentException("Only --source-schema 1 is supported.");
+        }
+
+        if (FaultDiskFull && FaultOffline)
+        {
+            throw new ArgumentException(
+                "Only one fault flag may be supplied: --fault-disk-full or --fault-offline.");
+        }
+
+        if (FaultDiskFull && Scenario != HarnessScenario.Save)
+        {
+            throw new ArgumentException(
+                "--fault-disk-full is only supported by the save scenario.");
+        }
+
+        if (FaultOffline && Scenario != HarnessScenario.Backup)
+        {
+            throw new ArgumentException(
+                "--fault-offline is only supported by the backup scenario.");
+        }
+
+        if (DraftDirectory is not null && Scenario != HarnessScenario.Save)
+        {
+            throw new ArgumentException("--draft-dir is only supported by the save scenario.");
+        }
+
+        if (RunId is not null && RunId.Trim().Length == 0)
+        {
+            throw new ArgumentException("Option --run-id requires a non-empty value.");
         }
     }
 

@@ -38,4 +38,21 @@ public sealed class C6BudgetTests
         Assert.Equal("C6_BUDGETS_CONFIRMED", C6Budget.ConfirmationEnvironmentVariable);
         Assert.NotEqual("confirmed", C6Budget.ApprovalStatus);
     }
+
+    [Fact]
+    public void Budget_StorageFaultResultsCannotClaimAPerformanceVerdict()
+    {
+        // Task 2 is correctness-only evidence. Its scenario result contract
+        // must not gain a budget/performance verdict, and the candidate gate
+        // stays explicit until the Task 5 confirmation run.
+        var propertyNames = typeof(HarnessScenarioResult)
+            .GetProperties()
+            .Select(property => property.Name)
+            .ToArray();
+
+        Assert.DoesNotContain("BudgetStatus", propertyNames);
+        Assert.DoesNotContain("PerformancePassed", propertyNames);
+        Assert.Equal("candidate-unconfirmed", C6Budget.ApprovalStatus);
+        Assert.True(C6Budget.RequiresUserConfirmation);
+    }
 }

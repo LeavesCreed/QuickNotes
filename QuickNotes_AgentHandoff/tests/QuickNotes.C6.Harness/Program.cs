@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using QuickNotes.C6.Harness;
 
 try
@@ -16,32 +17,60 @@ catch (ArgumentException exception)
 namespace QuickNotes.C6.Harness
 {
     /// <summary>
-    /// Task 1 only establishes the CLI contract. Real save/backup/restore/
-    /// migrate/perf scenario bodies are implemented by Tasks 2-5; until then
-    /// the runner reports not_implemented and returns a non-zero exit code
-    /// instead of pretending a scenario succeeded.
+    /// Task 2 realizes the save and backup bodies. Restore, migrate, and perf
+    /// remain contract-only until Tasks 3-5; those scenarios keep returning
+    /// <see cref="NotImplementedExitCode"/> instead of pretending to run.
     /// </summary>
     public static class HarnessRunner
     {
         public const int UsageExitCode = 2;
+        public const int ScenarioFailedExitCode = 1;
         public const int NotImplementedExitCode = 78;
 
-        public static Task<int> RunAsync(
+        private static readonly JsonSerializerOptions SerializerOptions = CreateSerializerOptions();
+
+        public static async Task<int> RunAsync(
             HarnessOptions options,
             CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(options);
             cancellationToken.ThrowIfCancellationRequested();
 
-            var status = new
+            HarnessScenarioResult? result = options.Scenario switch
             {
-                scenario = HarnessOptions.ToCliName(options.Scenario),
-                status = "not_implemented",
-                noteCount = options.NoteCount,
-                visibleCount = options.VisibleCount
+                HarnessScenario.Save => await SaveScenario.RunAsync(options, cancellationToken)
+                    .ConfigureAwait(false),
+                HarnessScenario.Backup => await BackupScenario.RunAsync(options, cancellationToken)
+                    .ConfigureAwait(false),
+                _ => null
             };
-            Console.Out.WriteLine(JsonSerializer.Serialize(status));
-            return Task.FromResult(NotImplementedExitCode);
+
+            if (result is null)
+            {
+                var status = new
+                {
+                    scenario = HarnessOptions.ToCliName(options.Scenario),
+                    status = "not_implemented",
+                    noteCount = options.NoteCount,
+                    visibleCount = options.VisibleCount
+                };
+                Console.Out.WriteLine(JsonSerializer.Serialize(status, SerializerOptions));
+                return NotImplementedExitCode;
+            }
+
+            Console.Out.WriteLine(JsonSerializer.Serialize(result, SerializerOptions));
+            return result.Passed ? 0 : ScenarioFailedExitCode;
+        }
+
+        private static JsonSerializerOptions CreateSerializerOptions()
+        {
+            var options = new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+            };
+            options.Converters.Add(new JsonStringEnumConverter());
+            return options;
         }
     }
 }
