@@ -48,6 +48,13 @@ public static class MetricsCollector
     public const string PartialSamplesError = "partial_samples";
 
     /// <summary>
+    /// Duration sentinel written into error samples. It is deliberately larger
+    /// than every C6 budget so a consumer that ignores <see cref="MetricSample.Error"/>
+    /// cannot mistake an aggregate of failed samples for a fast (zero-ms) pass.
+    /// </summary>
+    public const double ErrorDurationMs = double.MaxValue;
+
+    /// <summary>
     /// Runs <paramref name="action"/> once and returns a single-sample metric
     /// with the elapsed milliseconds and the process allocation, working set,
     /// and handle snapshots taken around it. Exceptions propagate; a failed
@@ -125,7 +132,7 @@ public static class MetricsCollector
 
         if (values.Count == 0)
         {
-            return new MetricSample { Name = name, Error = NoSamplesError };
+            return ErrorSample(name, NoSamplesError);
         }
 
         var ordered = new double[values.Count];
@@ -185,22 +192,15 @@ public static class MetricsCollector
 
         if (valid.Count == 0)
         {
-            return new MetricSample
-            {
-                Name = name,
-                SampleCount = 0,
-                Error = NoSamplesError
-            };
+            return ErrorSample(name, NoSamplesError);
         }
 
         if (valid.Count != samples.Count)
         {
-            return new MetricSample
-            {
-                Name = name,
-                SampleCount = valid.Count,
-                Error = PartialSamplesError
-            };
+            // Report the number of successful samples for diagnostics, but keep
+            // every percentile at the non-zero sentinel so this aggregate can
+            // never be read as a fast result.
+            return ErrorSample(name, PartialSamplesError, valid.Count);
         }
 
         var durations = new double[valid.Count];
@@ -220,6 +220,18 @@ public static class MetricsCollector
 
         return FromMilliseconds(name, durations, allocated, workingSet, handles);
     }
+
+    private static MetricSample ErrorSample(string name, string error, int sampleCount = 0) =>
+        new()
+        {
+            Name = name,
+            SampleCount = sampleCount,
+            P50Ms = ErrorDurationMs,
+            P95Ms = ErrorDurationMs,
+            P99Ms = ErrorDurationMs,
+            MaxMs = ErrorDurationMs,
+            Error = error
+        };
 
     private static double NearestRank(IReadOnlyList<double> ordered, int percentile)
     {

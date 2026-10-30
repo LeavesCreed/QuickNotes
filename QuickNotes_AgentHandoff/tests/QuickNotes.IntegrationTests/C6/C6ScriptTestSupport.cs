@@ -45,12 +45,33 @@ internal static class C6ScriptTestSupport
         return result;
     }
 
-    public static ScriptResult RunScriptAllowFailure(string script, params string[] arguments)
+    public static ScriptResult RunScriptAllowFailure(string script, params string[] arguments) =>
+        RunScriptAllowFailure(script, environment: null, arguments);
+
+    public static ScriptResult RunScriptAllowFailure(
+        string script,
+        IReadOnlyDictionary<string, string?>? environment,
+        params string[] arguments)
     {
         var scriptPath = Path.Combine(ScriptsRoot(), script);
         Assert.True(File.Exists(scriptPath), $"Missing script {scriptPath}.");
 
         var startInfo = CreateStartInfo();
+        if (environment is not null)
+        {
+            foreach (var pair in environment)
+            {
+                if (pair.Value is null)
+                {
+                    startInfo.Environment.Remove(pair.Key);
+                }
+                else
+                {
+                    startInfo.Environment[pair.Key] = pair.Value;
+                }
+            }
+        }
+
         startInfo.ArgumentList.Add("-File");
         startInfo.ArgumentList.Add(scriptPath);
         foreach (var argument in arguments)
@@ -139,6 +160,20 @@ internal static class C6ScriptTestSupport
         try
         {
             var path = RunRoot(runId);
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
+    public static void TryDeleteDirectory(string path)
+    {
+        try
+        {
             if (Directory.Exists(path))
             {
                 Directory.Delete(path, recursive: true);

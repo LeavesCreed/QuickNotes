@@ -1,0 +1,217 @@
+using System.Text.Json;
+using static QuickNotes.IntegrationTests.C6.C6ScriptTestSupport;
+
+namespace QuickNotes.IntegrationTests.C6;
+
+/// <summary>
+/// Safe contracts for the C6 Task 5 performance driver. These tests never
+/// launch WPF or run a soak; they inspect the script and exercise the pure
+/// soak/command helpers plus the confirmed-shape refusal path.
+/// </summary>
+public sealed class C6PerformanceScriptTests
+{
+    [Fact]
+    public void PerformanceScript_DeclaresHardenedAcceptanceAndSoakContracts()
+    {
+        var script = File.ReadAllText(Path.Combine(ScriptsRoot(), "Invoke-C6Performance.ps1"));
+        var common = File.ReadAllText(Path.Combine(ScriptsRoot(), "C6ScriptCommon.ps1"));
+
+        Assert.Contains("Notes -lt 1000", script, StringComparison.Ordinal);
+        Assert.Contains("Visible -lt 20", script, StringComparison.Ordinal);
+        Assert.Contains("StartupIterations -lt 10", script, StringComparison.Ordinal);
+        Assert.Contains("UiLaunches -lt 10", script, StringComparison.Ordinal);
+        Assert.Contains("requiredWindowCounts = @(5, 10, 20)", script, StringComparison.Ordinal);
+        Assert.Contains("soak_sample_count_shortfall", script, StringComparison.Ordinal);
+        Assert.Contains("soak_cadence_max_gap_seconds", script, StringComparison.Ordinal);
+        Assert.Contains("soak_working_set_growth_percent", script, StringComparison.Ordinal);
+        Assert.Contains("soak_handle_growth", script, StringComparison.Ordinal);
+        Assert.Contains("soak_process_unresponsive", script, StringComparison.Ordinal);
+        Assert.Contains("soak_unexpected_windows", script, StringComparison.Ordinal);
+        Assert.Contains("service_status_coupling", script, StringComparison.Ordinal);
+        Assert.Contains("New-C6TwoHourSoakCommand", script, StringComparison.Ordinal);
+        Assert.Contains("noteCount", script, StringComparison.Ordinal);
+
+        Assert.Contains(
+            "$minimumSampleCount = [Math]::Max(2, $expectedSampleCount - 1)",
+            common,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "$cadenceLimitSeconds = [double]$SampleSeconds * 1.5",
+            common,
+            StringComparison.Ordinal);
+        Assert.Contains("median-first-5-vs-median-last-5", common, StringComparison.Ordinal);
+        Assert.Contains("maximumWorkingSetGrowthPercent = 15", common, StringComparison.Ordinal);
+        Assert.Contains("maximumHandleGrowth = 50", common, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SoakEvidence_SingleSampleCannotPassAndCadenceWindowRulesApply()
+    {
+        var common = Path.Combine(ScriptsRoot(), "C6ScriptCommon.ps1");
+        var command = string.Join(
+            Environment.NewLine,
+            "$ErrorActionPreference = 'Stop'",
+            $". {PsQuote(common)}",
+            "$one = @([pscustomobject]@{ elapsedSeconds = 0.2; workingSetBytes = [int64]100000000; handleCount = 500; windowCount = 20; processResponding = $true; unexpectedWindowCount = 0 })",
+            "$single = Measure-C6SoakEvidence -Samples $one -DurationSeconds 7200 -SampleSeconds 60 -ExpectedWindowCount 20 -EvaluateGrowth $true",
+            "$valid = @(for ($i = 0; $i -le 120; $i++) { [pscustomobject]@{ elapsedSeconds = [double]($i * 60); workingSetBytes = [int64](100000000 + ($i * 100000)); handleCount = 900; windowCount = 20; processResponding = $true; unexpectedWindowCount = 0 } })",
+            "$full = Measure-C6SoakEvidence -Samples $valid -DurationSeconds 7200 -SampleSeconds 60 -ExpectedWindowCount 20 -EvaluateGrowth $true",
+            "$gapped = @($valid)",
+            "$gapped[60] = [pscustomobject]@{ elapsedSeconds = 3660.0; workingSetBytes = [int64]106000000; handleCount = 900; windowCount = 20; processResponding = $true; unexpectedWindowCount = 0 }",
+            "$gap = Measure-C6SoakEvidence -Samples $gapped -DurationSeconds 7200 -SampleSeconds 60 -ExpectedWindowCount 20 -EvaluateGrowth $false",
+            "$badWindow = @($valid)",
+            "$badWindow[0] = [pscustomobject]@{ elapsedSeconds = 0.0; workingSetBytes = [int64]100000000; handleCount = 900; windowCount = 19; processResponding = $false; unexpectedWindowCount = 2 }",
+            "$window = Measure-C6SoakEvidence -Samples $badWindow -DurationSeconds 7200 -SampleSeconds 60 -ExpectedWindowCount 20 -EvaluateGrowth $false",
+            "@{",
+            "  singleCount = $single.SampleCount",
+            "  singleMinimum = $single.MinimumSampleCount",
+            "  singleShortfall = $single.SampleCountShortfall",
+            "  singleFailures = @($single.StructuralFailures)",
+            "  fullCount = $full.SampleCount",
+            "  fullExpected = $full.ExpectedSampleCount",
+            "  fullMinimum = $full.MinimumSampleCount",
+            "  fullFailures = @($full.StructuralFailures)",
+            "  fullGrowthEvaluated = $full.GrowthEvaluated",
+            "  fullGrowth = $full.WorkingSetGrowthPercent",
+            "  gapMax = $gap.MaxGapSeconds",
+            "  gapFailures = @($gap.StructuralFailures)",
+            "  windowInstability = $window.WindowInstabilityCount",
+            "  windowUnresponsive = $window.ProcessUnresponsiveCount",
+            "  windowUnexpected = $window.UnexpectedWindowCount",
+            "  windowFailures = @($window.StructuralFailures)",
+            "} | ConvertTo-Json -Compress -Depth 6");
+
+        var result = RunPowerShellCommand(command);
+        Assert.Equal(0, result.ExitCode);
+
+        var json = ParseLastJsonObject(result.StandardOutput);
+        Assert.Equal(1, json.GetProperty("singleCount").GetInt32());
+        Assert.Equal(120, json.GetProperty("singleMinimum").GetInt32());
+        Assert.Equal(119, json.GetProperty("singleShortfall").GetInt32());
+        Assert.NotEmpty(json.GetProperty("singleFailures").EnumerateArray());
+
+        Assert.Equal(121, json.GetProperty("fullCount").GetInt32());
+        Assert.Equal(121, json.GetProperty("fullExpected").GetInt32());
+        Assert.Equal(120, json.GetProperty("fullMinimum").GetInt32());
+        Assert.Empty(json.GetProperty("fullFailures").EnumerateArray());
+        Assert.True(json.GetProperty("fullGrowthEvaluated").GetBoolean());
+        var growth = json.GetProperty("fullGrowth").GetDouble();
+        Assert.InRange(growth, 10.0, 13.0);
+
+        Assert.True(json.GetProperty("gapMax").GetDouble() > 90);
+        Assert.Contains(
+            json.GetProperty("gapFailures").EnumerateArray().Select(item => item.GetString()),
+            failure => failure is not null
+                && failure.Contains("largest soak sample gap", StringComparison.OrdinalIgnoreCase));
+
+        Assert.Equal(1, json.GetProperty("windowInstability").GetInt32());
+        Assert.Equal(1, json.GetProperty("windowUnresponsive").GetInt32());
+        Assert.Equal(1, json.GetProperty("windowUnexpected").GetInt32());
+    }
+
+    [Fact]
+    public void TwoHourSoakCommand_UsesFreshRunIdAndEvidenceRoot()
+    {
+        var common = Path.Combine(ScriptsRoot(), "C6ScriptCommon.ps1");
+        var scriptsRoot = ScriptsRoot();
+        var originalRunId = "c6-task5-final-20261030-151739";
+        var originalEvidence = Path.Combine(
+            Path.GetTempPath(),
+            "c6-task5-evidence",
+            originalRunId);
+        var command = string.Join(
+            Environment.NewLine,
+            "$ErrorActionPreference = 'Stop'",
+            $". {PsQuote(common)}",
+            "$result = New-C6TwoHourSoakCommand " +
+            $"-ScriptRoot {PsQuote(scriptsRoot)} " +
+            $"-RunId '{originalRunId}' " +
+            "-Notes 1000 -Visible 20 -StartupIterations 10 -UiLaunches 10 " +
+            "-ShowHideCycles 30 -SoakSampleSeconds 60 " +
+            $"-EvidenceRoot {PsQuote(originalEvidence)} " +
+            "-Timestamp '20261030-160000000'",
+            "$result | ConvertTo-Json -Compress -Depth 5");
+
+        var result = RunPowerShellCommand(command);
+        Assert.Equal(0, result.ExitCode);
+
+        var json = ParseLastJsonObject(result.StandardOutput);
+        var freshRunId = json.GetProperty("runId").GetString();
+        var freshEvidenceRoot = json.GetProperty("evidenceRoot").GetString();
+        var generatedCommand = json.GetProperty("command").GetString();
+
+        Assert.NotNull(freshRunId);
+        Assert.NotNull(freshEvidenceRoot);
+        Assert.NotNull(generatedCommand);
+        Assert.StartsWith(originalRunId + "-2h-", freshRunId, StringComparison.Ordinal);
+        Assert.NotEqual(originalRunId, freshRunId);
+        Assert.NotEqual(originalEvidence, freshEvidenceRoot, StringComparer.OrdinalIgnoreCase);
+        Assert.EndsWith(freshRunId, freshEvidenceRoot, StringComparison.Ordinal);
+        Assert.Equal(121, json.GetProperty("requiredSampleCount").GetInt32());
+        Assert.Equal(120, json.GetProperty("minimumSampleCount").GetInt32());
+
+        Assert.Contains("C6_BUDGETS_CONFIRMED='1'", generatedCommand, StringComparison.Ordinal);
+        Assert.Contains(freshRunId, generatedCommand, StringComparison.Ordinal);
+        Assert.Contains(freshEvidenceRoot, generatedCommand, StringComparison.Ordinal);
+        Assert.Contains("-DurationMinutes 120", generatedCommand, StringComparison.Ordinal);
+        Assert.Contains("-Notes 1000", generatedCommand, StringComparison.Ordinal);
+        Assert.Contains("-Visible 20", generatedCommand, StringComparison.Ordinal);
+        Assert.Contains("-StartupIterations 10", generatedCommand, StringComparison.Ordinal);
+        Assert.Contains("-UiLaunches 10", generatedCommand, StringComparison.Ordinal);
+        Assert.Contains("-ShowHideCycles 30", generatedCommand, StringComparison.Ordinal);
+        Assert.Contains("-SoakSampleSeconds 60", generatedCommand, StringComparison.Ordinal);
+        Assert.Contains(
+            Path.Combine(scriptsRoot, "Invoke-C6Performance.ps1"),
+            generatedCommand,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(
+            "-EvidenceRoot \"" + originalEvidence + "\"",
+            generatedCommand,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ConfirmedTinyShape_FailsClosedWithoutRunningTheProbe()
+    {
+        var runId = NewRunId();
+        var evidenceRoot = Path.Combine(
+            Path.GetTempPath(),
+            "c6-perf-evidence-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var result = RunScriptAllowFailure(
+                "Invoke-C6Performance.ps1",
+                new Dictionary<string, string?>
+                {
+                    ["C6_BUDGETS_CONFIRMED"] = "1"
+                },
+                "-RunId", runId,
+                "-Notes", "10",
+                "-Visible", "2",
+                "-StartupIterations", "1",
+                "-UiLaunches", "1",
+                "-ShowHideCycles", "0",
+                "-SkipSoak",
+                "-EvidenceRoot", evidenceRoot);
+
+            Assert.NotEqual(0, result.ExitCode);
+            Assert.Equal("FAIL", result.Json.GetProperty("status").GetString());
+            var caseResult = ReadCaseResult(runId, "C6-PERF");
+            var reason = caseResult.GetProperty("reason").GetString();
+            Assert.NotNull(reason);
+            Assert.Contains("acceptance", reason, StringComparison.OrdinalIgnoreCase);
+
+            var acceptance = caseResult.GetProperty("actual").GetProperty("acceptance");
+            Assert.False(acceptance.GetProperty("passed").GetBoolean());
+            Assert.True(acceptance.GetProperty("failures").GetArrayLength() >= 4);
+            Assert.True(
+                File.Exists(Path.Combine(evidenceRoot, "results", "C6-PERF.result.json")),
+                "The fail-closed acceptance result was not archived.");
+        }
+        finally
+        {
+            TryDeleteRunRoot(runId);
+            TryDeleteDirectory(evidenceRoot);
+        }
+    }
+}

@@ -119,7 +119,8 @@ internal static class Program
                     $"startup_mode_{started.Assessment?.Mode}");
             }
 
-            await EnsureVisibleCountAsync(host, options.VisibleWindows).ConfigureAwait(true);
+            var noteCount = await EnsureVisibleCountAsync(host, options.VisibleWindows)
+                .ConfigureAwait(true);
             windows = new NoteWindowManager(host);
             await windows.StartAsync().ConfigureAwait(true);
             await WaitForWindowsAsync(options.VisibleWindows, TimeSpan.FromSeconds(10))
@@ -127,6 +128,7 @@ internal static class Program
 
             var readyMs = Stopwatch.GetElapsedTime(processStartedAt).TotalMilliseconds;
             var ready = CaptureProcessMetrics();
+            var unexpectedWindowCount = CountUnexpectedWindows();
             var cycleTimes = options.ShowHideCycles > 0
                 ? await RunShowHideCyclesAsync(options.ShowHideCycles).ConfigureAwait(true)
                 : new List<double>();
@@ -143,6 +145,7 @@ internal static class Program
                 Status = "ok",
                 Mode = options.SoakSeconds > 0 ? "soak" : "startup",
                 VisibleWindows = options.VisibleWindows,
+                NoteCount = noteCount,
                 WindowCount = WindowList().Length,
                 ReadyMs = readyMs,
                 HostStartMs = hostStartMs,
@@ -151,6 +154,8 @@ internal static class Program
                 PrivateBytes = ready.PrivateBytes,
                 HandleCount = ready.HandleCount,
                 ThreadCount = ready.ThreadCount,
+                ProcessResponding = ready.Responding,
+                UnexpectedWindowCount = unexpectedWindowCount,
                 FinalWorkingSetBytes = final.WorkingSetBytes,
                 FinalHandleCount = final.HandleCount,
                 ShowHideCycles = cycleTimes.Count,
@@ -172,7 +177,7 @@ internal static class Program
         }
     }
 
-    private static async Task EnsureVisibleCountAsync(
+    private static async Task<int> EnsureVisibleCountAsync(
         DesktopApplicationHost host,
         int targetVisible)
     {
@@ -221,6 +226,8 @@ internal static class Program
                     DateTimeOffset.UtcNow).ConfigureAwait(true);
             }
         }
+
+        return active.Count;
     }
 
     private static async Task WaitForWindowsAsync(int expected, TimeSpan timeout)
@@ -304,6 +311,8 @@ internal static class Program
                 HandleCount = metrics.HandleCount,
                 ThreadCount = metrics.ThreadCount,
                 WindowCount = WindowList().Length,
+                ProcessResponding = metrics.Responding,
+                UnexpectedWindowCount = CountUnexpectedWindows(),
                 CycleMs = cycleTimes[0]
             };
             samples.Add(sample);
@@ -335,6 +344,16 @@ internal static class Program
         System.Windows.Application.Current?.Windows.OfType<NoteWindow>().ToArray()
         ?? Array.Empty<NoteWindow>();
 
+    /// <summary>
+    /// Counts non-note WPF windows. A modal dialog or unexpected window during
+    /// the soak is a failure signal rather than a normal part of the probe.
+    /// </summary>
+    private static int CountUnexpectedWindows() =>
+        System.Windows.Application.Current?.Windows
+            .OfType<Window>()
+            .Count(window => window is not NoteWindow)
+        ?? 0;
+
     private static ProcessMetrics CaptureProcessMetrics()
     {
         using var process = Process.GetCurrentProcess();
@@ -343,7 +362,8 @@ internal static class Program
             process.WorkingSet64,
             process.PrivateMemorySize64,
             process.HandleCount,
-            process.Threads.Count);
+            process.Threads.Count,
+            process.Responding);
     }
 
     private static double Percentile(IReadOnlyList<double> values, int percentile)
@@ -410,6 +430,7 @@ internal static class Program
             Status = "failed",
             Mode = options.SoakSeconds > 0 ? "soak" : "startup",
             VisibleWindows = options.VisibleWindows,
+            NoteCount = 0,
             WindowCount = 0,
             ReadyMs = Stopwatch.GetElapsedTime(processStartedAt).TotalMilliseconds,
             HostStartMs = 0,
@@ -418,6 +439,8 @@ internal static class Program
             PrivateBytes = 0,
             HandleCount = 0,
             ThreadCount = 0,
+            ProcessResponding = false,
+            UnexpectedWindowCount = 0,
             FinalWorkingSetBytes = 0,
             FinalHandleCount = 0,
             ShowHideCycles = 0,
@@ -445,7 +468,8 @@ internal static class Program
         long WorkingSetBytes,
         long PrivateBytes,
         int HandleCount,
-        int ThreadCount);
+        int ThreadCount,
+        bool Responding);
 }
 
 internal sealed class UiProbeException : Exception
@@ -468,6 +492,7 @@ internal sealed record UiProbeResult
     public required string Status { get; init; }
     public required string Mode { get; init; }
     public required int VisibleWindows { get; init; }
+    public required int NoteCount { get; init; }
     public required int WindowCount { get; init; }
     public required double ReadyMs { get; init; }
     public required double HostStartMs { get; init; }
@@ -476,6 +501,8 @@ internal sealed record UiProbeResult
     public required long PrivateBytes { get; init; }
     public required int HandleCount { get; init; }
     public required int ThreadCount { get; init; }
+    public required bool ProcessResponding { get; init; }
+    public required int UnexpectedWindowCount { get; init; }
     public required long FinalWorkingSetBytes { get; init; }
     public required int FinalHandleCount { get; init; }
     public required int ShowHideCycles { get; init; }
@@ -511,6 +538,8 @@ internal sealed record SoakSample
     public required int HandleCount { get; init; }
     public required int ThreadCount { get; init; }
     public required int WindowCount { get; init; }
+    public required bool ProcessResponding { get; init; }
+    public required int UnexpectedWindowCount { get; init; }
     public required double CycleMs { get; init; }
 }
 

@@ -48,12 +48,357 @@ function Get-C6ObjectProperty {
         return $Default
     }
 
+    if ($Object -is [System.Collections.IDictionary]) {
+        if ($Object.Contains($Name)) {
+            return $Object[$Name]
+        }
+
+        return $Default
+    }
+
     $property = $Object.PSObject.Properties[$Name]
     if ($null -eq $property) {
         return $Default
     }
 
     return $property.Value
+}
+
+function Get-C6Median {
+    param([double[]]$Values)
+
+    if ($null -eq $Values -or $Values.Count -eq 0) {
+        return $null
+    }
+
+    $ordered = @($Values | Sort-Object)
+    $middle = [int][Math]::Floor($ordered.Count / 2)
+    if (($ordered.Count % 2) -eq 1) {
+        return [double]$ordered[$middle]
+    }
+
+    return (([double]$ordered[$middle - 1] + [double]$ordered[$middle]) / 2.0)
+}
+
+# Reads the JSONL samples written by QuickNotes.C6.UiProbe. A missing or
+# malformed file is a hard failure, never an empty pass.
+function Read-C6SoakSamples {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        throw 'The soak sample path is required.'
+    }
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "The soak sample file '$Path' is missing."
+    }
+
+    $samples = New-Object System.Collections.Generic.List[object]
+    foreach ($line in @(Get-Content -LiteralPath $Path)) {
+        $trimmed = ([string]$line).Trim()
+        if ($trimmed.Length -eq 0) {
+            continue
+        }
+
+        try {
+            $samples.Add(($trimmed | ConvertFrom-Json))
+        }
+        catch {
+            throw "The soak sample file '$Path' contains an invalid JSON line."
+        }
+    }
+
+    return $samples.ToArray()
+}
+
+<#
+.SYNOPSIS
+Evaluates soak sample cadence, window stability, responsiveness, and growth.
+
+.DESCRIPTION
+Structural rules apply to every soak and fail closed:
+- expected samples = floor(duration / interval) + 1 (121 for 7,200 s at 60 s);
+- minimum accepted samples = max(2, expected - 1), so a single sample can
+  never pass;
+- maximum gap between samples and before the first sample is 150% of the
+  interval (90 s for a 60 s cadence);
+- the final sample must be no more than one cadence tolerance before the
+  requested duration;
+- every sample must report the expected window count, a responding process,
+  and no unexpected (dialog/modal) windows.
+
+Growth is evaluated only when -EvaluateGrowth is set (the 2-hour gate):
+- runs with at least 10 samples compare the median of the first 5 samples with
+  the median of the last 5 samples;
+- shorter runs use the first vs last sample for diagnostics only.
+#>
+function Measure-C6SoakEvidence {
+    param(
+        [object[]]$Samples,
+        [int]$DurationSeconds,
+        [int]$SampleSeconds,
+        [int]$ExpectedWindowCount,
+        [bool]$EvaluateGrowth = $false
+    )
+
+    if ($DurationSeconds -lt 1) {
+        throw 'DurationSeconds must be at least 1.'
+    }
+
+    if ($SampleSeconds -lt 1) {
+        throw 'SampleSeconds must be at least 1.'
+    }
+
+    $items = @($Samples)
+    $elapsedValues = New-Object System.Collections.Generic.List[double]
+    $workingSetValues = New-Object System.Collections.Generic.List[double]
+    $handleValues = New-Object System.Collections.Generic.List[double]
+    foreach ($item in $items) {
+        $elapsed = Get-C6ObjectProperty $item 'elapsedSeconds' $null
+        $workingSet = Get-C6ObjectProperty $item 'workingSetBytes' $null
+        $handles = Get-C6ObjectProperty $item 'handleCount' $null
+        if ($null -eq $elapsed -or $null -eq $workingSet -or $null -eq $handles) {
+            throw 'A soak sample is missing elapsedSeconds, workingSetBytes, or handleCount.'
+        }
+
+        $elapsedValues.Add([double]$elapsed)
+        $workingSetValues.Add([double]$workingSet)
+        $handleValues.Add([double]$handles)
+    }
+
+    $expectedSampleCount = [int][Math]::Floor($DurationSeconds / $SampleSeconds) + 1
+    $minimumSampleCount = [Math]::Max(2, $expectedSampleCount - 1)
+    $cadenceLimitSeconds = [double]$SampleSeconds * 1.5
+    $firstElapsedSeconds = if ($elapsedValues.Count -eq 0) { $null } else { $elapsedValues[0] }
+    $lastElapsedSeconds = if ($elapsedValues.Count -eq 0) { $null } else { $elapsedValues[$elapsedValues.Count - 1] }
+
+    $maxGapSeconds = 0.0
+    if ($elapsedValues.Count -gt 0) {
+        $maxGapSeconds = $elapsedValues[0]
+        for ($index = 1; $index -lt $elapsedValues.Count; $index++) {
+            $gap = $elapsedValues[$index] - $elapsedValues[$index - 1]
+            if ($gap -gt $maxGapSeconds) {
+                $maxGapSeconds = $gap
+            }
+        }
+    }
+
+    $windowInstabilityCount = 0
+    $processUnresponsiveCount = 0
+    $unexpectedWindowCount = 0
+    foreach ($item in $items) {
+        $windowCount = Get-C6ObjectProperty $item 'windowCount' $null
+        if ($null -eq $windowCount -or [int]$windowCount -ne $ExpectedWindowCount) {
+            $windowInstabilityCount++
+        }
+
+        $responding = Get-C6ObjectProperty $item 'processResponding' $null
+        if ($null -eq $responding -or -not [bool]$responding) {
+            $processUnresponsiveCount++
+        }
+
+        $unexpected = Get-C6ObjectProperty $item 'unexpectedWindowCount' $null
+        if ($null -eq $unexpected -or [int]$unexpected -ne 0) {
+            $unexpectedWindowCount++
+        }
+    }
+
+    $structuralFailures = New-Object System.Collections.Generic.List[string]
+    if ($items.Count -lt $minimumSampleCount) {
+        $structuralFailures.Add(
+            "Only $($items.Count) soak samples were recorded; at least $minimumSampleCount are required.")
+    }
+
+    if ($elapsedValues.Count -gt 1) {
+        for ($index = 1; $index -lt $elapsedValues.Count; $index++) {
+            if ($elapsedValues[$index] -lt $elapsedValues[$index - 1]) {
+                $structuralFailures.Add('Soak sample timestamps are not monotonic.')
+                break
+            }
+        }
+    }
+
+    if ($maxGapSeconds -gt $cadenceLimitSeconds) {
+        $structuralFailures.Add(
+            "The largest soak sample gap was $([Math]::Round($maxGapSeconds, 3)) s; the limit is $cadenceLimitSeconds s.")
+    }
+
+    if ($items.Count -gt 0 -and $firstElapsedSeconds -gt $cadenceLimitSeconds) {
+        $structuralFailures.Add(
+            "The first soak sample arrived at $([Math]::Round([double]$firstElapsedSeconds, 3)) s; the limit is $cadenceLimitSeconds s.")
+    }
+
+    if ($items.Count -gt 0) {
+        $finalGapSeconds = [double]$DurationSeconds - [double]$lastElapsedSeconds
+        if ($finalGapSeconds -gt $cadenceLimitSeconds) {
+            $structuralFailures.Add(
+                "The last soak sample was $([Math]::Round($finalGapSeconds, 3)) s before the requested end; the limit is $cadenceLimitSeconds s.")
+        }
+    }
+
+    if ($windowInstabilityCount -gt 0) {
+        $structuralFailures.Add(
+            "$windowInstabilityCount soak sample(s) did not have exactly $ExpectedWindowCount windows.")
+    }
+
+    if ($processUnresponsiveCount -gt 0) {
+        $structuralFailures.Add(
+            "$processUnresponsiveCount soak sample(s) reported an unresponsive process.")
+    }
+
+    if ($unexpectedWindowCount -gt 0) {
+        $structuralFailures.Add(
+            "$unexpectedWindowCount soak sample(s) reported an unexpected dialog or window.")
+    }
+
+    $growthEvaluated = $false
+    $growthMethod = 'not-evaluated'
+    $baselineWorkingSetBytes = $null
+    $finalWorkingSetBytes = $null
+    $baselineHandleCount = $null
+    $finalHandleCount = $null
+    $workingSetGrowthPercent = $null
+    $handleGrowth = $null
+    if ($EvaluateGrowth -and $items.Count -ge 2) {
+        $growthEvaluated = $true
+        if ($items.Count -ge 10) {
+            $growthMethod = 'median-first-5-vs-median-last-5'
+            $firstWorkingSetWindow = @(for ($index = 0; $index -lt 5; $index++) { $workingSetValues[$index] })
+            $lastWorkingSetWindow = @(for ($index = $items.Count - 5; $index -lt $items.Count; $index++) { $workingSetValues[$index] })
+            $firstHandleWindow = @(for ($index = 0; $index -lt 5; $index++) { $handleValues[$index] })
+            $lastHandleWindow = @(for ($index = $items.Count - 5; $index -lt $items.Count; $index++) { $handleValues[$index] })
+            $baselineWorkingSetBytes = Get-C6Median -Values $firstWorkingSetWindow
+            $finalWorkingSetBytes = Get-C6Median -Values $lastWorkingSetWindow
+            $baselineHandleCount = Get-C6Median -Values $firstHandleWindow
+            $finalHandleCount = Get-C6Median -Values $lastHandleWindow
+        }
+        else {
+            $growthMethod = 'first-vs-last-short-run'
+            $baselineWorkingSetBytes = $workingSetValues[0]
+            $finalWorkingSetBytes = $workingSetValues[$items.Count - 1]
+            $baselineHandleCount = $handleValues[0]
+            $finalHandleCount = $handleValues[$items.Count - 1]
+        }
+
+        if ($baselineWorkingSetBytes -le 0) {
+            $structuralFailures.Add('The soak working-set baseline was not positive.')
+        }
+        else {
+            $workingSetGrowthPercent = (
+                (([double]$finalWorkingSetBytes - [double]$baselineWorkingSetBytes) /
+                    [double]$baselineWorkingSetBytes) * 100.0)
+        }
+
+        $handleGrowth = [double]$finalHandleCount - [double]$baselineHandleCount
+    }
+
+    return [pscustomobject]@{
+        SampleCount = $items.Count
+        ExpectedSampleCount = $expectedSampleCount
+        MinimumSampleCount = $minimumSampleCount
+        SampleCountShortfall = [Math]::Max(0, $minimumSampleCount - $items.Count)
+        CadenceLimitSeconds = $cadenceLimitSeconds
+        MaxGapSeconds = $maxGapSeconds
+        FirstElapsedSeconds = $firstElapsedSeconds
+        LastElapsedSeconds = $lastElapsedSeconds
+        FinalGapSeconds = if ($items.Count -eq 0) { $null } else { [double]$DurationSeconds - [double]$lastElapsedSeconds }
+        WindowInstabilityCount = $windowInstabilityCount
+        ProcessUnresponsiveCount = $processUnresponsiveCount
+        UnexpectedWindowCount = $unexpectedWindowCount
+        GrowthEvaluated = $growthEvaluated
+        GrowthMethod = $growthMethod
+        BaselineWorkingSetBytes = $baselineWorkingSetBytes
+        FinalWorkingSetBytes = $finalWorkingSetBytes
+        WorkingSetGrowthPercent = $workingSetGrowthPercent
+        BaselineHandleCount = $baselineHandleCount
+        FinalHandleCount = $finalHandleCount
+        HandleGrowth = $handleGrowth
+        StructuralPassed = ($structuralFailures.Count -eq 0)
+        StructuralFailures = @($structuralFailures)
+    }
+}
+
+# Builds the machine-readable 2-hour acceptance command. The command always
+# uses a fresh RunId and a sibling EvidenceRoot derived from the current
+# evidence root, so executing it can never overwrite the 3-minute smoke run.
+# It also sets the exact C6_BUDGETS_CONFIRMED=1 gate before invoking pwsh.
+function New-C6TwoHourSoakCommand {
+    param(
+        [string]$ScriptRoot,
+        [string]$RunId,
+        [int]$Notes = 1000,
+        [int]$Visible = 20,
+        [int]$StartupIterations = 10,
+        [int]$UiLaunches = 10,
+        [int]$ShowHideCycles = 30,
+        [int]$SoakSampleSeconds = 60,
+        [string]$EvidenceRoot,
+        [string]$Timestamp
+    )
+
+    Assert-C6RunId -RunId $RunId
+    if ([string]::IsNullOrWhiteSpace($EvidenceRoot)) {
+        throw 'EvidenceRoot is required to build the 2-hour soak command.'
+    }
+
+    $stamp = if ([string]::IsNullOrWhiteSpace($Timestamp)) {
+        (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmssfff')
+    }
+    else {
+        $Timestamp
+    }
+
+    $suffix = '-2h-' + $stamp
+    $maximumBaseLength = 64 - $suffix.Length
+    if ($maximumBaseLength -lt 1) {
+        throw 'The 2-hour RunId suffix is too long.'
+    }
+
+    $baseRunId = if ($RunId.Length -gt $maximumBaseLength) {
+        $RunId.Substring(0, $maximumBaseLength)
+    }
+    else {
+        $RunId
+    }
+
+    $freshRunId = $baseRunId + $suffix
+    Assert-C6RunId -RunId $freshRunId
+    $fullEvidenceRoot = [System.IO.Path]::GetFullPath($EvidenceRoot)
+    $freshEvidenceRoot = Join-Path ([System.IO.Path]::GetDirectoryName($fullEvidenceRoot)) $freshRunId
+    $scriptPath = Join-Path ([System.IO.Path]::GetFullPath($ScriptRoot)) 'Invoke-C6Performance.ps1'
+    if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
+        throw "The performance script was not found at '$scriptPath'."
+    }
+
+    $parts = @(
+        ('pwsh -NoProfile -File ' + (ConvertTo-C6QuotedArgument -Value $scriptPath)),
+        ('-RunId ' + $freshRunId),
+        ('-Notes ' + $Notes),
+        ('-Visible ' + $Visible),
+        ('-StartupIterations ' + $StartupIterations),
+        ('-UiLaunches ' + $UiLaunches),
+        ('-ShowHideCycles ' + $ShowHideCycles),
+        ('-DurationMinutes 120'),
+        ('-SoakSampleSeconds ' + $SoakSampleSeconds),
+        ('-EvidenceRoot ' + (ConvertTo-C6QuotedArgument -Value $freshEvidenceRoot))
+    )
+    $envPrefix = '$env:C6_BUDGETS_CONFIRMED=''1''; '
+    $requiredSampleCount = [int][Math]::Floor(7200 / $SoakSampleSeconds) + 1
+    $minimumSampleCount = [Math]::Max(2, $requiredSampleCount - 1)
+    $cadenceLimitSeconds = [double]$SoakSampleSeconds * 1.5
+
+    return [pscustomobject]@{
+        runId = $freshRunId
+        evidenceRoot = $freshEvidenceRoot
+        command = ($envPrefix + ($parts -join ' '))
+        shell = 'pwsh'
+        requiredMinutes = 120
+        requiredSampleCount = $requiredSampleCount
+        minimumSampleCount = $minimumSampleCount
+        cadenceLimitSeconds = $cadenceLimitSeconds
+        maximumWorkingSetGrowthPercent = 15
+        maximumHandleGrowth = 50
+    }
 }
 
 function Test-C6IsReparsePoint {

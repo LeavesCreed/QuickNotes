@@ -19,7 +19,7 @@ public sealed class C6PerformanceTests
     };
 
     [Fact]
-    public void MetricsCollector_ReportsPercentilesAndNeverText()
+    public void MetricsCollector_ReportsPercentilesAndNeverSerializesNoteText()
     {
         var samples = new[] { 10d, 20d, 30d, 40d, 100d };
         var metric = MetricsCollector.FromMilliseconds("save", samples);
@@ -42,8 +42,34 @@ public sealed class C6PerformanceTests
         Assert.Equal("no_samples", metric.Error);
         Assert.Equal(0, metric.SampleCount);
         Assert.False(metric.HasSamples);
-        Assert.Equal(0, metric.P50Ms);
+        Assert.Equal(MetricsCollector.ErrorDurationMs, metric.P50Ms);
+        Assert.Equal(MetricsCollector.ErrorDurationMs, metric.P95Ms);
+        Assert.Equal(MetricsCollector.ErrorDurationMs, metric.P99Ms);
+        Assert.Equal(MetricsCollector.ErrorDurationMs, metric.MaxMs);
         Assert.DoesNotContain("body", JsonSerializer.Serialize(metric), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void MetricsCollector_ErrorAggregatesNeverLookLikeFastZeroSamples()
+    {
+        var partial = MetricsCollector.Aggregate(
+            "save",
+            new[]
+            {
+                MetricsCollector.FromMilliseconds("save", new[] { 1d }),
+                new MetricSample { Name = "save", Error = MetricsCollector.NoSamplesError }
+            });
+
+        Assert.Equal(MetricsCollector.PartialSamplesError, partial.Error);
+        Assert.Equal(1, partial.SampleCount);
+        Assert.False(partial.HasSamples);
+
+        // A consumer that ignores Error must still see values far above every
+        // budget instead of a zero-millisecond pass.
+        Assert.Equal(MetricsCollector.ErrorDurationMs, partial.P50Ms);
+        Assert.True(partial.P95Ms > C6Budget.SaveP95.TotalMilliseconds);
+        Assert.True(partial.P99Ms > C6Budget.SaveP99.TotalMilliseconds);
+        Assert.True(partial.MaxMs > C6Budget.SaveP95.TotalMilliseconds);
     }
 
     [Theory]
@@ -82,6 +108,7 @@ public sealed class C6PerformanceTests
             Array.Empty<MetricSample>());
         Assert.Equal("no_samples", empty.Error);
         Assert.False(empty.HasSamples);
+        Assert.Equal(MetricsCollector.ErrorDurationMs, empty.P50Ms);
 
         var samples = new[]
         {
@@ -170,7 +197,7 @@ public sealed class C6PerformanceTests
     }
 
     [Fact]
-    public async Task PerfScenario_RunsASmallServiceProbeAndNeverSerializesNoteText()
+    public async Task PerfScenario_SmallProbeCompletesAllMeasurementsAndStaysUnconfirmedWithoutNoteText()
     {
         using var temp = new C6TemporaryDirectory();
         var runId = Path.GetFileName(temp.RootPath);
@@ -196,6 +223,11 @@ public sealed class C6PerformanceTests
         Assert.True(result.Passed);
         Assert.Equal("unconfirmed", result.BudgetStatus);
         Assert.Equal("unconfirmed", result.PerformanceStatus);
+        Assert.All(result.BudgetChecks, check =>
+        {
+            Assert.Equal("unconfirmed", check.Status);
+            Assert.False(check.Passed);
+        });
         Assert.Equal(12, result.NoteCount);
         Assert.Contains(result.Metrics, metric =>
             metric.Name == "startup_host" && metric.SampleCount == 2);
