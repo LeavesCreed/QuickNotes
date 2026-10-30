@@ -17,7 +17,8 @@ param(
     [ValidateSet('save', 'backup', 'restore', 'migration', 'all')]
     [string]$Scenario = 'all',
     [int]$SizeMB = 512,
-    [int]$Notes = 1000
+    [int]$Notes = 1000,
+    [string]$EvidenceRoot
 )
 
 . (Join-Path $PSScriptRoot 'C6ScriptCommon.ps1')
@@ -28,6 +29,7 @@ if ($Notes -lt 1) {
 
 $handoffRoot = Get-C6HandoffRoot -ScriptRoot $PSScriptRoot
 $runRoot = Get-C6RunRoot -RunId $RunId
+$evidenceRoot = Get-C6EvidenceRoot -HandoffRoot $handoffRoot -RunId $RunId -EvidenceRoot $EvidenceRoot
 [System.IO.Directory]::CreateDirectory($runRoot) | Out-Null
 $dataRoot = Join-Path $runRoot 'data'
 $checkpointDirectory = Join-Path $runRoot 'checkpoints'
@@ -179,7 +181,7 @@ function Write-C6StorageNotRun {
         -Restart ([ordered]@{ method = 'not-run'; passed = $false; databaseReadable = $false; notePresent = $false; failure = $Reason }) `
         -Evidence @() `
         -Cleanup ([ordered]@{ status = 'PASS'; message = 'No C6 resources were created for this case.' }) `
-        -Reason $Reason | Out-Null
+        -Reason $Reason -EvidenceRoot $evidenceRoot | Out-Null
 }
 
 function Invoke-C6F01 {
@@ -195,6 +197,36 @@ function Invoke-C6F01 {
     $creation = $volume.Creation.Json
     $mountPath = [string](Get-C6HarnessField $creation 'mountPath' '')
     $volumeId = [string](Get-C6HarnessField $creation 'volumeId' '')
+    $volumeLabel = [string](Get-C6HarnessField $creation 'volumeLabel' ('C6-' + $RunId))
+    $diskNumber = Get-C6HarnessField $creation 'diskNumber' $null
+    $partitionNumber = Get-C6HarnessField $creation 'partitionNumber' $null
+    $creationMountVerified = (Get-C6HarnessField $creation 'mountVerified' $false) -eq $true
+
+    # Re-verify the mount positively before any harness or filler write. A
+    # failed verification removes the disposable volume and reports NOT RUN.
+    $mountVerification = Get-C6MountVerification `
+        -MountPath $mountPath `
+        -RunRoot $runRoot `
+        -SystemRoot $env:SystemRoot `
+        -ExpectedDiskNumber ([int]$diskNumber) `
+        -ExpectedPartitionNumber ([int]$partitionNumber) `
+        -ExpectedVolumeId $volumeId `
+        -ExpectedLabel $volumeLabel
+    if (-not $creationMountVerified -or $null -eq $diskNumber -or $null -eq $partitionNumber -or -not $mountVerification.Passed) {
+        $removal = Remove-C6StorageVolume
+        $reason = ('The C6 mount could not be positively verified as the just-created volume before any file was written: ' +
+            (@($mountVerification.Failures) -join '; '))
+        Write-C6StorageNotRun -Case 'C6-F01' -Scenario 'save' `
+            -Expected 'When the isolated volume is full during autosave, the save reports no success, the draft remains, and a reopen finds a readable database.' `
+            -Reason ("NOT RUN: $reason") `
+            -ActualExtra ([ordered]@{
+                mountVerification = $mountVerification
+                volumeRemoved = $removal.Passed
+                volumeRemovalReason = $removal.Reason
+            })
+        return 'NOT RUN'
+    }
+
     $volumeDataRoot = Join-Path $mountPath 'data'
     $draftDirectory = Join-Path $runRoot 'drafts'
     [System.IO.Directory]::CreateDirectory($draftDirectory) | Out-Null
@@ -216,7 +248,7 @@ function Invoke-C6F01 {
             '--notes', [string]$Notes,
             '--visible', '1'
         )
-        $setupEvidence = Save-C6HarnessEvidence -RunId $RunId -Name 'C6-F01-setup' -HarnessResult $setup
+        $setupEvidence = Save-C6HarnessEvidence -RunId $RunId -Name 'C6-F01-setup' -HarnessResult $setup -EvidenceRoot $evidenceRoot
 
         $filler = Join-Path $mountPath 'c6-filler.bin'
         $margin = 8192
@@ -261,7 +293,7 @@ function Invoke-C6F01 {
             '--notes', [string]$Notes,
             '--visible', '1'
         )
-        $faultEvidence = Save-C6HarnessEvidence -RunId $RunId -Name 'C6-F01-fault' -HarnessResult $faulted
+        $faultEvidence = Save-C6HarnessEvidence -RunId $RunId -Name 'C6-F01-fault' -HarnessResult $faulted -EvidenceRoot $evidenceRoot
     }
     catch {
         $errorMessage = $_.Exception.Message
@@ -290,6 +322,7 @@ function Invoke-C6F01 {
         injection = 'vhd-free-space-exhausted'
         sizeMB = $SizeMB
         volumeCreated = $true
+        mountVerification = $mountVerification
         fill = $fillDetail
         setupStatus = Get-C6HarnessField $setupJson 'status' $null
         faultStatus = Get-C6HarnessField $faultJson 'status' $null
@@ -315,7 +348,8 @@ function Invoke-C6F01 {
     $reason = if ($passed) { $null } elseif (-not $cleanupPassed) { 'The C6 volume cleanup failed.' } else { $errorMessage }
     Write-C6CaseResult -RunId $RunId -Case 'C6-F01' -Status $status -Scenario 'save' `
         -Expected 'When the isolated volume is full during autosave, the save reports no success, the draft remains, and a reopen finds a readable database.' `
-        -Actual $actual -Restart $restartEvidence -Evidence $evidence -Cleanup $cleanup -Reason $reason | Out-Null
+        -Actual $actual -Restart $restartEvidence -Evidence $evidence -Cleanup $cleanup -Reason $reason `
+        -EvidenceRoot $evidenceRoot | Out-Null
     return $status
 }
 
@@ -337,6 +371,7 @@ function Invoke-C6AclChildCase {
         RunId = $RunId
         Case = $AclCase
         Notes = $Notes
+        EvidenceRoot = $evidenceRoot
     }
     $status = Read-C6CaseStatus -Case $ResultCase
     if ($null -eq $status) {
@@ -377,6 +412,7 @@ function Invoke-C6F06 {
         RunId = $RunId
         Case = 'RestorePreflightDeny'
         Notes = $Notes
+        EvidenceRoot = $evidenceRoot
     }
     $status = Read-C6CaseStatus -Case 'C6-F06'
     if ($null -eq $status) {

@@ -17,7 +17,8 @@ param(
     [string]$RunId,
     [ValidateSet('DraftDeny', 'BackupDeny', 'RestorePreflightDeny', 'All')]
     [string]$Case = 'All',
-    [int]$Notes = 1000
+    [int]$Notes = 1000,
+    [string]$EvidenceRoot
 )
 
 . (Join-Path $PSScriptRoot 'C6ScriptCommon.ps1')
@@ -28,6 +29,7 @@ if ($Notes -lt 1) {
 
 $handoffRoot = Get-C6HandoffRoot -ScriptRoot $PSScriptRoot
 $runRoot = Get-C6RunRoot -RunId $RunId
+$evidenceRoot = Get-C6EvidenceRoot -HandoffRoot $handoffRoot -RunId $RunId -EvidenceRoot $EvidenceRoot
 [System.IO.Directory]::CreateDirectory($runRoot) | Out-Null
 $dataRoot = Join-Path $runRoot 'data'
 $checkpointDirectory = Join-Path $runRoot 'checkpoints'
@@ -86,7 +88,7 @@ function Invoke-C6DraftDenyCase {
     try {
         $state = Set-C6AclDenyWrite -Target $target -RunRoot $runRoot -Case 'draft'
         $first = Invoke-C6SaveHarness -DraftDirectory $target
-        $firstEvidence = Save-C6HarnessEvidence -RunId $RunId -Name 'C6-F02-first' -HarnessResult $first
+        $firstEvidence = Save-C6HarnessEvidence -RunId $RunId -Name 'C6-F02-first' -HarnessResult $first -EvidenceRoot $evidenceRoot
     }
     catch {
         $errorMessage = $_.Exception.Message
@@ -101,7 +103,7 @@ function Invoke-C6DraftDenyCase {
     if ($null -eq $errorMessage -and $aclRestored) {
         try {
             $second = Invoke-C6SaveHarness -DraftDirectory $target
-            $secondEvidence = Save-C6HarnessEvidence -RunId $RunId -Name 'C6-F02-retry' -HarnessResult $second
+            $secondEvidence = Save-C6HarnessEvidence -RunId $RunId -Name 'C6-F02-retry' -HarnessResult $second -EvidenceRoot $evidenceRoot
         }
         catch {
             $errorMessage = $_.Exception.Message
@@ -128,23 +130,37 @@ function Invoke-C6DraftDenyCase {
         (Get-C6HarnessField $secondJson 'noteSaved' $false) -eq $true -and
         (Get-C6HarnessField $secondJson 'draftRetained' $true) -eq $false
     )
+    $firstRestart = Get-C6HarnessField $firstJson 'restart' $null
+    $firstRestartPassed = ($null -ne $firstRestart -and (Get-C6HarnessField $firstRestart 'passed' $false) -eq $true)
     $restart = Get-C6HarnessField $secondJson 'restart' $null
     $restartPassed = ($null -ne $restart -and (Get-C6HarnessField $restart 'passed' $false) -eq $true)
     $targetWritable = Test-C6WriteAccess -Directory $target
+    $sddlMatches = ($null -ne $restore -and (Get-C6HarnessField $restore 'SddlMatchesOriginal' $false) -eq $true)
+    $writeProbePassed = ($null -ne $restore -and (Get-C6HarnessField $restore 'WriteProbePassed' $false) -eq $true)
     $passed = (
         $draftFailureVisible -and $noFalseSuccess -and $retrySucceeded -and
-        $aclRestored -and $targetWritable -and $restartPassed
+        $aclRestored -and $sddlMatches -and $writeProbePassed -and
+        $targetWritable -and $firstRestartPassed -and $restartPassed
     )
 
     $actual = [ordered]@{
         injection = 'acl-deny-write'
         target = 'acl-root/drafts'
+        aclMask = [ordered]@{
+            user = Get-C6HarnessField $state 'User' $null
+            denyAcePresent = Get-C6HarnessField $state 'DenyAcePresent' $false
+            denyMaskHex = Get-C6HarnessField $state 'DenyMaskHex' $null
+            denyRights = Get-C6HarnessField $state 'DenyRights' $null
+            originalSddl = Get-C6HarnessField $state 'Sddl' $null
+            appliedSddl = Get-C6HarnessField $state 'AppliedSddl' $null
+        }
         firstRun = [ordered]@{
             exitCode = if ($null -ne $first) { $first.ExitCode } else { $null }
             status = Get-C6HarnessField $firstJson 'status' $null
             failureStage = Get-C6HarnessField $firstJson 'failureStage' $null
             draftSaved = Get-C6HarnessField $firstJson 'draftSaved' $null
             noteSaved = Get-C6HarnessField $firstJson 'noteSaved' $null
+            restart = $firstRestart
         }
         secondRun = [ordered]@{
             exitCode = if ($null -ne $second) { $second.ExitCode } else { $null }
@@ -156,11 +172,17 @@ function Invoke-C6DraftDenyCase {
         draftFailureVisible = $draftFailureVisible
         noFalseSuccess = $noFalseSuccess
         retrySucceeded = $retrySucceeded
+        firstRestartPassed = $firstRestartPassed
+        retryRestartPassed = $restartPassed
         aclWritableAfterRestore = $targetWritable
         error = $errorMessage
     }
     $cleanup = [ordered]@{
         aclRestored = $aclRestored
+        sddlMatchesOriginal = $sddlMatches
+        writeProbePassed = $writeProbePassed
+        originalSddl = if ($null -ne $restore) { Get-C6HarnessField $restore 'OriginalSddl' $null } else { Get-C6HarnessField $state 'Sddl' $null }
+        restoredSddl = if ($null -ne $restore) { Get-C6HarnessField $restore 'RestoredSddl' $null } else { $null }
         message = if ($null -ne $restore) { $restore.Message } else { 'No ACL restoration was recorded.' }
         repair = if ($null -ne $restore) { $restore.Repair } else { $null }
     }
@@ -173,10 +195,11 @@ function Invoke-C6DraftDenyCase {
     $evidence = @($firstEvidence, $secondEvidence) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
 
     $status = if ($passed) { 'PASS' } else { 'FAIL' }
-    $reason = if ($passed) { $null } elseif (-not $aclRestored) { 'The ACL was not restored; repair it before cleanup.' } else { $errorMessage }
+    $reason = if ($passed) { $null } elseif (-not $aclRestored) { 'The ACL was not restored; repair it before cleanup.' } elseif (-not $sddlMatches -or -not $writeProbePassed) { 'The ACL restoration did not match the original SDDL or failed the write probe.' } elseif (-not $firstRestartPassed) { 'The first (faulted) run did not record a passing reopen result.' } else { $errorMessage }
     Write-C6CaseResult -RunId $RunId -Case 'C6-F02' -Status $status -Scenario 'save' `
-        -Expected 'A denied draft directory produces a visible draft failure and a retry succeeds after the ACL is restored; the database remains readable.' `
-        -Actual $actual -Restart $restartEvidence -Evidence $evidence -Cleanup $cleanup -Reason $reason | Out-Null
+        -Expected 'A denied draft directory produces a visible draft failure whose reopen is recorded, and a retry succeeds after the ACL is restored to the exact original SDDL; the database remains readable.' `
+        -Actual $actual -Restart $restartEvidence -Evidence $evidence -Cleanup $cleanup -Reason $reason `
+        -EvidenceRoot $evidenceRoot | Out-Null
     return $status
 }
 
@@ -196,14 +219,14 @@ function Invoke-C6BackupDenyCase {
 
     try {
         $baseline = Invoke-C6BackupHarness -BackupDirectory $target
-        $baselineEvidence = Save-C6HarnessEvidence -RunId $RunId -Name 'C6-F03-baseline' -HarnessResult $baseline
+        $baselineEvidence = Save-C6HarnessEvidence -RunId $RunId -Name 'C6-F03-baseline' -HarnessResult $baseline -EvidenceRoot $evidenceRoot
         foreach ($file in Get-ChildItem -LiteralPath $target -Filter 'quicknotes-*.zip' -File) {
             $baselineHashes[$file.Name] = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
         }
 
         $state = Set-C6AclDenyWrite -Target $target -RunRoot $runRoot -Case 'backup'
         $faulted = Invoke-C6BackupHarness -BackupDirectory $target
-        $faultEvidence = Save-C6HarnessEvidence -RunId $RunId -Name 'C6-F03-fault' -HarnessResult $faulted
+        $faultEvidence = Save-C6HarnessEvidence -RunId $RunId -Name 'C6-F03-fault' -HarnessResult $faulted -EvidenceRoot $evidenceRoot
     }
     catch {
         $errorMessage = $_.Exception.Message
@@ -218,7 +241,7 @@ function Invoke-C6BackupDenyCase {
     if ($null -eq $errorMessage -and $aclRestored) {
         try {
             $retry = Invoke-C6BackupHarness -BackupDirectory $target
-            $retryEvidence = Save-C6HarnessEvidence -RunId $RunId -Name 'C6-F03-retry' -HarnessResult $retry
+            $retryEvidence = Save-C6HarnessEvidence -RunId $RunId -Name 'C6-F03-retry' -HarnessResult $retry -EvidenceRoot $evidenceRoot
         }
         catch {
             $errorMessage = $_.Exception.Message
@@ -237,9 +260,10 @@ function Invoke-C6BackupDenyCase {
         (Get-C6HarnessField $baselineJson 'status' '') -eq 'ok' -and
         (Get-C6HarnessField $baselineBackup 'newPackagePublished' $false) -eq $true
     )
+    $faultSignature = Test-C6BackupFaultSignature -FaultedJson $faultJson
     $noFalseSuccess = (
         (Get-C6HarnessField $faultJson 'status' '') -ne 'ok' -and
-        (Get-C6HarnessField $faultBackup 'status' '') -ne 'Succeeded' -and
+        $faultSignature.Passed -eq $true -and
         (Get-C6HarnessField $faulted 'ExitCode' 0) -ne 0
     )
     $noNewPackage = (
@@ -258,6 +282,13 @@ function Invoke-C6BackupDenyCase {
         }
     }
 
+    $baselinePackageHashes = @($baselineHashes.Keys | Sort-Object | ForEach-Object {
+        [ordered]@{ name = $_; sha256 = $baselineHashes[$_] }
+    })
+    $currentPackageHashes = @($currentHashes.Keys | Sort-Object | ForEach-Object {
+        [ordered]@{ name = $_; sha256 = $currentHashes[$_] }
+    })
+
     $retrySucceeded = (
         $null -ne $retry -and $retry.ExitCode -eq 0 -and
         (Get-C6HarnessField $retryJson 'status' '') -eq 'ok' -and
@@ -266,18 +297,30 @@ function Invoke-C6BackupDenyCase {
     $restart = Get-C6HarnessField $faultJson 'restart' $null
     $restartPassed = ($null -ne $restart -and (Get-C6HarnessField $restart 'passed' $false) -eq $true)
     $targetWritable = Test-C6WriteAccess -Directory $target
+    $sddlMatches = ($null -ne $restore -and (Get-C6HarnessField $restore 'SddlMatchesOriginal' $false) -eq $true)
+    $writeProbePassed = ($null -ne $restore -and (Get-C6HarnessField $restore 'WriteProbePassed' $false) -eq $true)
     $passed = (
         $baselineSucceeded -and $noFalseSuccess -and $noNewPackage -and
         $existingBackupIntact -and $retrySucceeded -and $aclRestored -and
+        $sddlMatches -and $writeProbePassed -and
         $targetWritable -and $restartPassed
     )
 
     $actual = [ordered]@{
         injection = 'acl-deny-write'
         target = 'acl-root/backups'
+        aclMask = [ordered]@{
+            user = Get-C6HarnessField $state 'User' $null
+            denyAcePresent = Get-C6HarnessField $state 'DenyAcePresent' $false
+            denyMaskHex = Get-C6HarnessField $state 'DenyMaskHex' $null
+            denyRights = Get-C6HarnessField $state 'DenyRights' $null
+            originalSddl = Get-C6HarnessField $state 'Sddl' $null
+            appliedSddl = Get-C6HarnessField $state 'AppliedSddl' $null
+        }
         baseline = [ordered]@{
             exitCode = if ($null -ne $baseline) { $baseline.ExitCode } else { $null }
             packageCount = if ($null -ne $baselineBackup) { Get-C6HarnessField $baselineBackup 'packageCountAfter' $null } else { $null }
+            packages = $baselinePackageHashes
         }
         faulted = [ordered]@{
             exitCode = if ($null -ne $faulted) { $faulted.ExitCode } else { $null }
@@ -287,6 +330,14 @@ function Invoke-C6BackupDenyCase {
             packageCountAfter = Get-C6HarnessField $faultBackup 'packageCountAfter' $null
             temporaryResidueCount = Get-C6HarnessField $faultBackup 'temporaryResidueCount' $null
         }
+        faultSignature = [ordered]@{
+            expectedStatus = $faultSignature.ExpectedStatus
+            expectedErrorCode = $faultSignature.ExpectedErrorCode
+            observedStatus = $faultSignature.ObservedStatus
+            observedErrorCode = $faultSignature.ObservedErrorCode
+            exactMatch = $faultSignature.Passed
+        }
+        currentPackages = $currentPackageHashes
         retry = [ordered]@{
             exitCode = if ($null -ne $retry) { $retry.ExitCode } else { $null }
             status = Get-C6HarnessField $retryJson 'status' $null
@@ -301,6 +352,10 @@ function Invoke-C6BackupDenyCase {
     }
     $cleanup = [ordered]@{
         aclRestored = $aclRestored
+        sddlMatchesOriginal = $sddlMatches
+        writeProbePassed = $writeProbePassed
+        originalSddl = if ($null -ne $restore) { Get-C6HarnessField $restore 'OriginalSddl' $null } else { Get-C6HarnessField $state 'Sddl' $null }
+        restoredSddl = if ($null -ne $restore) { Get-C6HarnessField $restore 'RestoredSddl' $null } else { $null }
         message = if ($null -ne $restore) { $restore.Message } else { 'No ACL restoration was recorded.' }
         repair = if ($null -ne $restore) { $restore.Repair } else { $null }
     }
@@ -313,10 +368,11 @@ function Invoke-C6BackupDenyCase {
     $evidence = @($baselineEvidence, $faultEvidence, $retryEvidence) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
 
     $status = if ($passed) { 'PASS' } else { 'FAIL' }
-    $reason = if ($passed) { $null } elseif (-not $aclRestored) { 'The ACL was not restored; repair it before cleanup.' } else { $errorMessage }
+    $reason = if ($passed) { $null } elseif (-not $aclRestored) { 'The ACL was not restored; repair it before cleanup.' } elseif (-not $sddlMatches -or -not $writeProbePassed) { 'The ACL restoration did not match the original SDDL or failed the write probe.' } elseif (-not $faultSignature.Passed) { 'The faulted backup did not report StorageUnavailable/DestinationUnavailable.' } else { $errorMessage }
     Write-C6CaseResult -RunId $RunId -Case 'C6-F03' -Status $status -Scenario 'backup' `
-        -Expected 'An unwritable backup destination reports no success, publishes no final package, and leaves the existing backup byte-identical.' `
-        -Actual $actual -Restart $restartEvidence -Evidence $evidence -Cleanup $cleanup -Reason $reason | Out-Null
+        -Expected 'An unwritable backup destination reports backupStatus StorageUnavailable with errorCode DestinationUnavailable, publishes no final package, and leaves the existing backup byte-identical.' `
+        -Actual $actual -Restart $restartEvidence -Evidence $evidence -Cleanup $cleanup -Reason $reason `
+        -EvidenceRoot $evidenceRoot | Out-Null
     return $status
 }
 
@@ -339,7 +395,8 @@ function Invoke-C6RestorePreflightCase {
     Write-C6CaseResult -RunId $RunId -Case 'C6-F06' -Status 'NOT RUN' -Scenario 'restore' `
         -Expected 'An offline backup directory is rejected by restore preflight without switching or bypassing writes.' `
         -Actual $actual -Restart $restart -Evidence @() -Cleanup $cleanup `
-        -Reason 'NOT RUN: the restore preflight scenario body is Task 3; Task 2 does not implement a restore harness.' | Out-Null
+        -Reason 'NOT RUN: the restore preflight scenario body is Task 3; Task 2 does not implement a restore harness.' `
+        -EvidenceRoot $evidenceRoot | Out-Null
     return 'NOT RUN'
 }
 
@@ -360,7 +417,7 @@ foreach ($selected in $cases) {
             -Actual ([ordered]@{ error = $_.Exception.Message }) `
             -Restart ([ordered]@{ method = 'not-run'; passed = $false; databaseReadable = $false; notePresent = $false }) `
             -Evidence @() -Cleanup ([ordered]@{ aclRestored = $false; message = 'Unhandled script error.' }) `
-            -Reason $_.Exception.Message | Out-Null
+            -Reason $_.Exception.Message -EvidenceRoot $evidenceRoot | Out-Null
     }
 }
 

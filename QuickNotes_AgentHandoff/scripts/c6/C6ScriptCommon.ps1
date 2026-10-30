@@ -42,6 +42,257 @@ function Assert-C6PathUnder {
     }
 }
 
+function Get-C6ObjectProperty {
+    param($Object, [string]$Name, $Default = $null)
+    if ($null -eq $Object) {
+        return $Default
+    }
+
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) {
+        return $Default
+    }
+
+    return $property.Value
+}
+
+function Test-C6IsReparsePoint {
+    param([string]$Path)
+    $attributes = [System.IO.File]::GetAttributes($Path)
+    return (($attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
+}
+
+function Get-C6ReparsePoints {
+    param([string]$Root)
+    $fullRoot = [System.IO.Path]::GetFullPath($Root)
+    if (Test-C6IsReparsePoint -Path $fullRoot) {
+        return @($fullRoot)
+    }
+
+    $found = New-Object System.Collections.Generic.List[string]
+    $stack = New-Object System.Collections.Stack
+    $stack.Push($fullRoot)
+    while ($stack.Count -gt 0) {
+        $directory = [string]$stack.Pop()
+        foreach ($entry in [System.IO.Directory]::EnumerateFileSystemEntries($directory)) {
+            $attributes = [System.IO.File]::GetAttributes($entry)
+            if (($attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                $found.Add($entry)
+                continue
+            }
+
+            if (($attributes -band [System.IO.FileAttributes]::Directory) -ne 0) {
+                $stack.Push($entry)
+            }
+        }
+    }
+
+    return $found.ToArray()
+}
+
+function Remove-C6MountPathSafely {
+    param([string]$MountPath)
+
+    if (-not (Test-Path -LiteralPath $MountPath)) {
+        return
+    }
+
+    if (Test-C6IsReparsePoint -Path $MountPath) {
+        # A volume mount point / junction is removed as a link only; the
+        # target volume is never traversed by a recursive delete.
+        [System.IO.Directory]::Delete($MountPath, $false)
+        return
+    }
+
+    $reparsePoints = @(Get-C6ReparsePoints -Root $MountPath)
+    if ($reparsePoints.Count -gt 0) {
+        throw ("Refusing to recursively delete '$MountPath' because it contains reparse points: " +
+            ($reparsePoints -join ', '))
+    }
+
+    Remove-Item -LiteralPath $MountPath -Recurse -Force
+}
+
+function Test-C6MountIdentity {
+    param(
+        $ResolvedVolume,
+        $ResolvedPartition,
+        [int]$ExpectedDiskNumber,
+        [int]$ExpectedPartitionNumber,
+        [string]$ExpectedVolumeId,
+        [string]$ExpectedLabel,
+        [string]$MountPath,
+        [string]$RunRoot,
+        [string]$SystemRoot
+    )
+
+    $failures = New-Object System.Collections.Generic.List[string]
+    $observed = [ordered]@{
+        mountPath = $MountPath
+        volumeLabel = $null
+        volumePath = $null
+        driveLetter = $null
+        volumeUniqueId = $null
+        diskNumber = $null
+        partitionNumber = $null
+        partitionGuid = $null
+    }
+
+    $mountFull = [System.IO.Path]::GetFullPath($MountPath)
+    $runRootFull = [System.IO.Path]::GetFullPath($RunRoot)
+    if (-not (Test-C6PathUnder -Path $mountFull -Root $runRootFull)) {
+        $failures.Add("The mount path '$mountFull' is not under the C6 run root '$runRootFull'.")
+    }
+
+    $systemDriveLetter = $null
+    if ([string]::IsNullOrWhiteSpace($SystemRoot)) {
+        $failures.Add('The system root could not be determined; the mount cannot be proven non-system.')
+    }
+    else {
+        $systemRootFull = [System.IO.Path]::GetFullPath($SystemRoot).TrimEnd('\')
+        $systemDriveLetter = $systemRootFull.Substring(0, 1)
+        if ($mountFull -ieq $systemRootFull -or
+            $mountFull.StartsWith($systemRootFull + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $failures.Add("The mount path '$mountFull' is on the system volume ($systemRootFull).")
+        }
+    }
+
+    if ($null -eq $ResolvedVolume) {
+        $failures.Add('Get-Volume did not resolve the mount path to a volume.')
+    }
+    else {
+        $observed.volumeLabel = [string]$ResolvedVolume.FileSystemLabel
+        $observed.volumePath = [string]$ResolvedVolume.Path
+        $observed.volumeUniqueId = [string]$ResolvedVolume.UniqueId
+        if ($null -ne $ResolvedVolume.DriveLetter) {
+            $observed.driveLetter = ([string]$ResolvedVolume.DriveLetter).TrimEnd(':')
+        }
+
+        if ([string]::IsNullOrWhiteSpace($ExpectedLabel) -or
+            $observed.volumeLabel -ine $ExpectedLabel) {
+            $failures.Add("The resolved volume label '$($observed.volumeLabel)' does not match the expected C6 label '$ExpectedLabel'.")
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($observed.driveLetter) -and
+            $observed.driveLetter -ieq $systemDriveLetter) {
+            $failures.Add('The resolved volume is mounted on the system drive letter.')
+        }
+    }
+
+    if ($null -eq $ResolvedPartition) {
+        $failures.Add('Get-Partition did not resolve the mount path to a partition.')
+    }
+    else {
+        $observed.diskNumber = [int]$ResolvedPartition.DiskNumber
+        $observed.partitionNumber = [int]$ResolvedPartition.PartitionNumber
+        $observed.partitionGuid = [string]$ResolvedPartition.Guid
+        if ($observed.diskNumber -ne $ExpectedDiskNumber) {
+            $failures.Add("The resolved disk number $($observed.diskNumber) does not match the created disk $ExpectedDiskNumber.")
+        }
+
+        if ($observed.partitionNumber -ne $ExpectedPartitionNumber) {
+            $failures.Add("The resolved partition number $($observed.partitionNumber) does not match the created partition $ExpectedPartitionNumber.")
+        }
+
+        if ([string]::IsNullOrWhiteSpace($ExpectedVolumeId)) {
+            $failures.Add('The created volume has no recorded identity to compare against.')
+        }
+        elseif ($observed.partitionGuid -ine $ExpectedVolumeId -and
+            $observed.volumeUniqueId -ine $ExpectedVolumeId) {
+            $failures.Add('The resolved partition/volume identity does not match the just-created C6 volume.')
+        }
+    }
+
+    return [pscustomobject]@{
+        Passed = ($failures.Count -eq 0)
+        Failures = @($failures)
+        Observed = [pscustomobject]$observed
+    }
+}
+
+function Get-C6MountVerification {
+    param(
+        [string]$MountPath,
+        [string]$RunRoot,
+        [string]$SystemRoot,
+        [int]$ExpectedDiskNumber,
+        [int]$ExpectedPartitionNumber,
+        [string]$ExpectedVolumeId,
+        [string]$ExpectedLabel
+    )
+
+    $resolvedVolume = $null
+    $resolvedPartition = $null
+    try {
+        $volumeCommand = Get-Command Get-Volume -ErrorAction SilentlyContinue
+        if ($null -eq $volumeCommand) {
+            throw 'Get-Volume is unavailable; the C6 mount cannot be positively verified.'
+        }
+
+        $resolvedVolume = Get-Volume -FilePath $MountPath -ErrorAction Stop
+        if ($null -eq $resolvedVolume) {
+            throw 'Get-Volume -FilePath returned no volume for the C6 mount path.'
+        }
+
+        $partitions = @(Get-Partition -Volume $resolvedVolume -ErrorAction Stop)
+        if ($partitions.Count -ne 1) {
+            throw "Get-Partition returned $($partitions.Count) partitions for the C6 mount path; exactly one is required."
+        }
+
+        $resolvedPartition = $partitions[0]
+    }
+    catch {
+        return [pscustomobject]@{
+            Passed = $false
+            Failures = @($_.Exception.Message)
+            Observed = $null
+        }
+    }
+
+    return Test-C6MountIdentity -ResolvedVolume $resolvedVolume -ResolvedPartition $resolvedPartition `
+        -ExpectedDiskNumber $ExpectedDiskNumber -ExpectedPartitionNumber $ExpectedPartitionNumber `
+        -ExpectedVolumeId $ExpectedVolumeId -ExpectedLabel $ExpectedLabel `
+        -MountPath $MountPath -RunRoot $RunRoot -SystemRoot $SystemRoot
+}
+
+function Test-C6BackupFaultSignature {
+    param($FaultedJson)
+
+    $backup = Get-C6ObjectProperty -Object $FaultedJson -Name 'backup' -Default $null
+    $observedStatus = [string](Get-C6ObjectProperty -Object $backup -Name 'status' -Default '')
+    $observedErrorCode = [string](Get-C6ObjectProperty -Object $backup -Name 'errorCode' -Default '')
+    return [pscustomobject]@{
+        Passed = ($observedStatus -eq 'StorageUnavailable' -and $observedErrorCode -eq 'DestinationUnavailable')
+        ExpectedStatus = 'StorageUnavailable'
+        ExpectedErrorCode = 'DestinationUnavailable'
+        ObservedStatus = $observedStatus
+        ObservedErrorCode = $observedErrorCode
+    }
+}
+
+function Get-C6EvidenceRoot {
+    param(
+        [string]$HandoffRoot,
+        [string]$RunId,
+        [string]$EvidenceRoot
+    )
+
+    $runRoot = Get-C6RunRoot -RunId $RunId
+    if ([string]::IsNullOrWhiteSpace($EvidenceRoot)) {
+        $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $HandoffRoot '..'))
+        $EvidenceRoot = Join-Path $repoRoot (
+            '.superpowers\sdd\2026-10-30-c6-fault-performance-stability\task-2-evidence\' + $RunId)
+    }
+
+    $full = [System.IO.Path]::GetFullPath($EvidenceRoot)
+    if (Test-C6PathUnder -Path $full -Root $runRoot) {
+        throw "EvidenceRoot must be outside the disposable C6 run root. Received '$full'."
+    }
+
+    [System.IO.Directory]::CreateDirectory($full) | Out-Null
+    return $full
+}
+
 function Write-C6JsonFile {
     param([string]$Path, $Object)
     $directory = [System.IO.Path]::GetDirectoryName($Path)
@@ -188,6 +439,50 @@ function Get-C6CurrentUser {
     return [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 }
 
+function Get-C6DenyAceAudit {
+    param($Acl, [string]$User)
+
+    $currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $denyAce = $null
+    foreach ($ace in @($Acl.Access)) {
+        if ($ace.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Deny) {
+            continue
+        }
+
+        try {
+            $aceSid = $ace.IdentityReference.Translate(
+                [System.Security.Principal.SecurityIdentifier]).Value
+        }
+        catch {
+            $aceSid = $null
+        }
+
+        if ($aceSid -eq $currentSid) {
+            $denyAce = $ace
+            break
+        }
+    }
+
+    $mask = $null
+    $maskHex = $null
+    $rights = $null
+    if ($null -ne $denyAce) {
+        $mask = [int]$denyAce.FileSystemRights
+        $maskHex = ('0x{0:X}' -f $mask)
+        $rights = [string]$denyAce.FileSystemRights
+    }
+
+    return [pscustomobject]@{
+        User = $User
+        DenyAcePresent = ($null -ne $denyAce)
+        Mask = $mask
+        MaskHex = $maskHex
+        Rights = $rights
+        HasWriteData = ($null -ne $mask -and (($mask -band 0x2) -ne 0))
+        HasAppendData = ($null -ne $mask -and (($mask -band 0x4) -ne 0))
+    }
+}
+
 function Set-C6AclDenyWrite {
     param(
         [string]$Target,
@@ -201,27 +496,39 @@ function Set-C6AclDenyWrite {
     }
 
     $acl = Get-Acl -LiteralPath $Target
+    $user = Get-C6CurrentUser
     $state = [ordered]@{
         case = $Case
         target = $Target
         sddl = $acl.Sddl
-        user = Get-C6CurrentUser
+        user = $user
         createdByC6 = $true
         appliedAtUtc = (Get-Date).ToUniversalTime().ToString('O')
+        appliedSddl = $null
+        denyAcePresent = $false
+        denyMaskHex = $null
+        denyRights = $null
     }
     $backupPath = Join-Path $RunRoot ("acl-{0}.json" -f $Case)
+
+    # The original SDDL is persisted before any ACL change so a crash can
+    # always restore it from disk.
     Write-C6JsonFile -Path $backupPath -Object $state
     $stateObject = [pscustomobject]@{
         Target = $Target
         Sddl = $state.sddl
-        User = $state.user
+        User = $user
         BackupPath = $backupPath
+        AppliedSddl = $null
+        DenyAcePresent = $false
+        DenyMaskHex = $null
+        DenyRights = $null
     }
 
     # Deny file-creation and directory-creation only. Denying all write access
     # on a directory also blocks some directory handle opens on Windows, which
     # would make the failure unobservable instead of testing a write failure.
-    & icacls.exe $Target /deny "$($state.user):(OI)(CI)(WD,AD)" | Out-Null
+    & icacls.exe $Target /deny "$($user):(OI)(CI)(WD,AD)" | Out-Null
     if ($LASTEXITCODE -ne 0) {
         $restore = Restore-C6Acl -State $stateObject
         if ($restore.Status -ne 'PASS') {
@@ -240,6 +547,27 @@ function Set-C6AclDenyWrite {
         throw 'The ACL deny did not take effect (an elevated process can bypass it); no fault was injected.'
     }
 
+    $appliedAcl = Get-Acl -LiteralPath $Target
+    $audit = Get-C6DenyAceAudit -Acl $appliedAcl -User $user
+    if (-not $audit.DenyAcePresent -or -not $audit.HasWriteData -or -not $audit.HasAppendData) {
+        $restore = Restore-C6Acl -State $stateObject
+        if ($restore.Status -ne 'PASS') {
+            throw "The deny ACE audit failed and the original ACL could not be restored: $($restore.Message) $($restore.Repair)"
+        }
+
+        throw ("The deny ACE audit failed: present=$($audit.DenyAcePresent), mask=$($audit.MaskHex), rights=$($audit.Rights).")
+    }
+
+    $state.appliedSddl = $appliedAcl.Sddl
+    $state.denyAcePresent = $audit.DenyAcePresent
+    $state.denyMaskHex = $audit.MaskHex
+    $state.denyRights = $audit.Rights
+    Write-C6JsonFile -Path $backupPath -Object $state
+
+    $stateObject.AppliedSddl = $appliedAcl.Sddl
+    $stateObject.DenyAcePresent = $audit.DenyAcePresent
+    $stateObject.DenyMaskHex = $audit.MaskHex
+    $stateObject.DenyRights = $audit.Rights
     return $stateObject
 }
 
@@ -247,7 +575,15 @@ function Restore-C6Acl {
     param($State)
 
     if ($null -eq $State) {
-        return [pscustomobject]@{ Status = 'PASS'; Message = 'No ACL change was applied.' }
+        return [pscustomobject]@{
+            Status = 'PASS'
+            Message = 'No ACL change was applied.'
+            OriginalSddl = $null
+            RestoredSddl = $null
+            SddlMatchesOriginal = $true
+            WriteProbePassed = $true
+            Repair = $null
+        }
     }
 
     if (-not (Test-Path -LiteralPath $State.Target -PathType Container)) {
@@ -255,26 +591,61 @@ function Restore-C6Acl {
             Remove-Item -LiteralPath $State.BackupPath -Force
         }
 
-        return [pscustomobject]@{ Status = 'PASS'; Message = 'ACL target no longer exists.' }
+        return [pscustomobject]@{
+            Status = 'PASS'
+            Message = 'ACL target no longer exists.'
+            OriginalSddl = $State.Sddl
+            RestoredSddl = $null
+            SddlMatchesOriginal = $true
+            WriteProbePassed = $true
+            Repair = $null
+        }
     }
 
+    $restoredSddl = $null
     try {
         $acl = Get-Acl -LiteralPath $State.Target
         $acl.SetSecurityDescriptorSddlForm($State.Sddl)
         Set-Acl -LiteralPath $State.Target -AclObject $acl
+        $restoredSddl = (Get-Acl -LiteralPath $State.Target).Sddl
     }
     catch {
         return [pscustomobject]@{
             Status = 'FAIL'
             Message = "ACL restoration failed: $($_.Exception.Message)"
+            OriginalSddl = $State.Sddl
+            RestoredSddl = $restoredSddl
+            SddlMatchesOriginal = $false
+            WriteProbePassed = $false
             Repair = "Run: icacls `"$($State.Target)`" /remove:d `"$($State.User)`" ; if that fails, Set-Acl from SDDL $($State.Sddl)"
         }
     }
 
-    if (-not (Test-C6WriteAccess -Directory $State.Target)) {
+    $sddlMatches = [string]::Equals(
+        [string]$restoredSddl,
+        [string]$State.Sddl,
+        [System.StringComparison]::OrdinalIgnoreCase)
+    $writeProbePassed = Test-C6WriteAccess -Directory $State.Target
+    if (-not $sddlMatches) {
+        return [pscustomobject]@{
+            Status = 'FAIL'
+            Message = 'The ACL was rewritten but the restored SDDL does not match the original.'
+            OriginalSddl = $State.Sddl
+            RestoredSddl = $restoredSddl
+            SddlMatchesOriginal = $false
+            WriteProbePassed = $writeProbePassed
+            Repair = "Run: icacls `"$($State.Target)`" /remove:d `"$($State.User)`" ; if that fails, Set-Acl from SDDL $($State.Sddl)"
+        }
+    }
+
+    if (-not $writeProbePassed) {
         return [pscustomobject]@{
             Status = 'FAIL'
             Message = 'The ACL was rewritten but the write probe still fails.'
+            OriginalSddl = $State.Sddl
+            RestoredSddl = $restoredSddl
+            SddlMatchesOriginal = $true
+            WriteProbePassed = $false
             Repair = "Run: icacls `"$($State.Target)`" /remove:d `"$($State.User)`" ; if that fails, Set-Acl from SDDL $($State.Sddl)"
         }
     }
@@ -283,7 +654,15 @@ function Restore-C6Acl {
         Remove-Item -LiteralPath $State.BackupPath -Force
     }
 
-    return [pscustomobject]@{ Status = 'PASS'; Message = 'The original SDDL was restored and verified.' }
+    return [pscustomobject]@{
+        Status = 'PASS'
+        Message = 'The original SDDL was restored and verified.'
+        OriginalSddl = $State.Sddl
+        RestoredSddl = $restoredSddl
+        SddlMatchesOriginal = $true
+        WriteProbePassed = $true
+        Repair = $null
+    }
 }
 
 function Write-C6CaseResult {
@@ -297,24 +676,51 @@ function Write-C6CaseResult {
         $Restart,
         [string[]]$Evidence,
         $Cleanup,
-        [string]$Reason
+        [string]$Reason,
+        [string]$EvidenceRoot
     )
 
     $runRoot = Get-C6RunRoot -RunId $RunId
     $resultsDirectory = Join-Path $runRoot 'results'
     [System.IO.Directory]::CreateDirectory($resultsDirectory) | Out-Null
+    $retainedEvidenceRoot = $null
+    if (-not [string]::IsNullOrWhiteSpace($EvidenceRoot)) {
+        $retainedEvidenceRoot = [System.IO.Path]::GetFullPath($EvidenceRoot)
+        if (Test-C6PathUnder -Path $retainedEvidenceRoot -Root $runRoot) {
+            throw "EvidenceRoot must be outside the disposable C6 run root. Received '$retainedEvidenceRoot'."
+        }
 
-    $relativeEvidence = @()
+        [System.IO.Directory]::CreateDirectory($retainedEvidenceRoot) | Out-Null
+    }
+
+    $retainedEvidence = @()
     foreach ($item in @($Evidence)) {
         if ([string]::IsNullOrWhiteSpace($item)) {
             continue
         }
 
-        $full = [System.IO.Path]::GetFullPath((Join-Path $runRoot $item))
-        Assert-C6PathUnder -Path $full -Root $runRoot -Description 'Evidence path'
-        $relativeEvidence += $item
+        if ([System.IO.Path]::IsPathRooted($item)) {
+            $full = [System.IO.Path]::GetFullPath($item)
+        }
+        else {
+            $full = [System.IO.Path]::GetFullPath((Join-Path $runRoot $item))
+        }
+
+        if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {
+            throw "Evidence file does not exist: '$full'."
+        }
+
+        if ($null -ne $retainedEvidenceRoot) {
+            Assert-C6PathUnder -Path $full -Root $retainedEvidenceRoot -Description 'Retained evidence path'
+        }
+        else {
+            Assert-C6PathUnder -Path $full -Root $runRoot -Description 'Evidence path'
+        }
+
+        $retainedEvidence += $full
     }
 
+    $archivePath = $null
     $result = [ordered]@{
         case = $Case
         status = $Status
@@ -325,19 +731,33 @@ function Write-C6CaseResult {
         expected = $Expected
         actual = $Actual
         restart = $Restart
-        evidence = @($relativeEvidence)
+        evidence = @($retainedEvidence)
         cleanup = $Cleanup
     }
+    if ($null -ne $retainedEvidenceRoot) {
+        $archivePath = Join-Path $retainedEvidenceRoot ("results\{0}.result.json" -f $Case)
+        $result.evidenceRoot = $retainedEvidenceRoot
+        $result.resultArchivePath = $archivePath
+    }
+
     if (-not [string]::IsNullOrWhiteSpace($Reason)) {
         $result.reason = $Reason
     }
 
     $resultPath = Join-Path $resultsDirectory ("{0}.result.json" -f $Case)
     Write-C6JsonFile -Path $resultPath -Object $result
+    if ($null -ne $archivePath) {
+        [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($archivePath)) | Out-Null
+        Copy-Item -LiteralPath $resultPath -Destination $archivePath -Force
+        if (-not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
+            throw "The retained result archive was not written: '$archivePath'."
+        }
+    }
+
     $summary = [ordered]@{
         case = $Case
         status = $Status
-        resultPath = ("results/{0}.result.json" -f $Case)
+        resultPath = if ($null -ne $archivePath) { $archivePath } else { ("results/{0}.result.json" -f $Case) }
     }
     [Console]::Out.WriteLine(($summary | ConvertTo-Json -Compress))
     return $resultPath
@@ -347,15 +767,27 @@ function Save-C6HarnessEvidence {
     param(
         [string]$RunId,
         [string]$Name,
-        $HarnessResult
+        $HarnessResult,
+        [string]$EvidenceRoot
     )
 
     $runRoot = Get-C6RunRoot -RunId $RunId
-    $path = Join-Path $runRoot ("evidence\{0}.json" -f $Name)
+    if (-not [string]::IsNullOrWhiteSpace($EvidenceRoot)) {
+        $fullRoot = [System.IO.Path]::GetFullPath($EvidenceRoot)
+        if (Test-C6PathUnder -Path $fullRoot -Root $runRoot) {
+            throw "EvidenceRoot must be outside the disposable C6 run root. Received '$fullRoot'."
+        }
+
+        $path = Join-Path $fullRoot ("raw\{0}.json" -f $Name)
+    }
+    else {
+        $path = Join-Path $runRoot ("evidence\{0}.json" -f $Name)
+    }
+
     $evidence = [ordered]@{
         exitCode = $HarnessResult.ExitCode
         result = $HarnessResult.Json
     }
     Write-C6JsonFile -Path $path -Object $evidence
-    return ("evidence/{0}.json" -f $Name)
+    return [System.IO.Path]::GetFullPath($path)
 }

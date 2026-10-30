@@ -136,14 +136,35 @@ try {
         $volumeId = [string]$volume.UniqueId
     }
 
+    $volumeLabel = 'C6-' + $RunId
+
+    # Positive mount guard: resolve the directory mount back to a volume and
+    # partition, and require it to be the just-created C6 disk. A path that
+    # merely exists (for example on C:) never satisfies this check.
+    $mountVerification = Get-C6MountVerification `
+        -MountPath $mountPath `
+        -RunRoot $runRoot `
+        -SystemRoot $env:SystemRoot `
+        -ExpectedDiskNumber $disk.Number `
+        -ExpectedPartitionNumber $partition.PartitionNumber `
+        -ExpectedVolumeId $volumeId `
+        -ExpectedLabel $volumeLabel
+    if (-not $mountVerification.Passed) {
+        throw ('The C6 mount could not be positively verified as the just-created volume: ' +
+            (@($mountVerification.Failures) -join '; '))
+    }
+
     $metadata = [ordered]@{
         runId = $RunId
         createdByC6 = $true
         vhdxPath = $vhdx
         mountPath = $mountPath
+        volumeLabel = $volumeLabel
         volumeId = $volumeId
         diskNumber = $disk.Number
         partitionNumber = $partition.PartitionNumber
+        mountVerified = $true
+        mountVerification = $mountVerification.Observed
         sizeMB = $SizeMB
         createdAtUtc = (Get-Date).ToUniversalTime().ToString('O')
     }
@@ -154,6 +175,11 @@ try {
         runId = $RunId
         mountPath = $mountPath
         volumeId = $volumeId
+        volumeLabel = $volumeLabel
+        diskNumber = $disk.Number
+        partitionNumber = $partition.PartitionNumber
+        mountVerified = $true
+        mountVerification = $mountVerification.Observed
         createdByC6 = $true
     }
     Write-Output ($payload | ConvertTo-Json -Compress)
@@ -172,7 +198,7 @@ catch {
     try {
         if ($createdByThisInvocation -and $null -ne $mountPath -and (Test-Path -LiteralPath $mountPath -PathType Container)) {
             Assert-C6PathUnder -Path $mountPath -Root (Get-C6RunRoot -RunId $RunId) -Description 'Partial mount path'
-            Remove-Item -LiteralPath $mountPath -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-C6MountPathSafely -MountPath $mountPath
         }
     }
     catch {
@@ -181,7 +207,9 @@ catch {
     try {
         if ($createdByThisInvocation -and $null -ne $vhdx -and (Test-Path -LiteralPath $vhdx -PathType Leaf)) {
             Assert-C6PathUnder -Path $vhdx -Root $root -Description 'Partial VHDX path'
-            Remove-Item -LiteralPath $vhdx -Force -ErrorAction SilentlyContinue
+            if (-not (Test-C6IsReparsePoint -Path $vhdx)) {
+                Remove-Item -LiteralPath $vhdx -Force -ErrorAction SilentlyContinue
+            }
         }
     }
     catch {

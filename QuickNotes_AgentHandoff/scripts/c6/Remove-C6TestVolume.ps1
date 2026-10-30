@@ -87,11 +87,32 @@ try {
     }
 
     if (Test-Path -LiteralPath $mountPath -PathType Container) {
-        Remove-Item -LiteralPath $mountPath -Recurse -Force
+        foreach ($candidate in @($vhdx)) {
+            if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+                continue
+            }
+
+            try {
+                $image = Get-DiskImage -ImagePath $candidate -ErrorAction Stop
+            }
+            catch {
+                $image = $null
+            }
+
+            if ($null -ne $image -and $image.Attached) {
+                throw 'The C6 VHDX is still attached; refusing to touch its mount directory.'
+            }
+        }
+
+        Remove-C6MountPathSafely -MountPath $mountPath
         $removed.mountDirectoryRemoved = $true
     }
 
     if (Test-Path -LiteralPath $vhdx -PathType Leaf) {
+        if (Test-C6IsReparsePoint -Path $vhdx) {
+            throw 'The C6 VHDX path is a reparse point; refusing to delete it.'
+        }
+
         try {
             $image = Get-DiskImage -ImagePath $vhdx -ErrorAction Stop
         }
