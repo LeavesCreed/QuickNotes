@@ -348,6 +348,60 @@ public sealed class PostSwitchVerificationFaultRestoreStore : IRestoreStore
             cancellationToken);
 }
 
+/// <summary>
+/// Harness-only composition for C6-M03. Delegates every restore stage except
+/// <see cref="RollbackAsync"/>, which throws the production
+/// <see cref="RestoreException"/> shape. Combined with the post-switch
+/// verification fault this drives the real coordinator into
+/// <see cref="RestoreStatus.RollbackFailed"/> and the persisted
+/// writes-blocked state without any production test hook.
+/// </summary>
+public sealed class FailingRollbackRestoreStore : IRestoreStore
+{
+    private readonly IRestoreStore _inner;
+
+    public FailingRollbackRestoreStore(IRestoreStore inner)
+    {
+        _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+    }
+
+    public Task<RestoreDatabaseInfo> InspectAsync(
+        string databasePath,
+        CancellationToken cancellationToken = default) =>
+        _inner.InspectAsync(databasePath, cancellationToken);
+
+    public Task<string?> TryGetDatabaseHashAsync(
+        string databasePath,
+        CancellationToken cancellationToken = default) =>
+        _inner.TryGetDatabaseHashAsync(databasePath, cancellationToken);
+
+    public Task<RestoreDatabaseInfo> PrepareCurrentAsync(
+        string currentDatabasePath,
+        CancellationToken cancellationToken = default) =>
+        _inner.PrepareCurrentAsync(currentDatabasePath, cancellationToken);
+
+    public Task SwitchAsync(
+        string stagedDatabasePath,
+        string currentDatabasePath,
+        string rollbackDatabasePath,
+        CancellationToken cancellationToken = default) =>
+        _inner.SwitchAsync(
+            stagedDatabasePath,
+            currentDatabasePath,
+            rollbackDatabasePath,
+            cancellationToken);
+
+    public Task RollbackAsync(
+        string rollbackDatabasePath,
+        string currentDatabasePath,
+        string failedDatabasePath,
+        CancellationToken cancellationToken = default) =>
+        throw new RestoreException(
+            "rollback",
+            RestoreErrorCodes.RollbackFailed,
+            "Injected C6 rollback failure after switching the restored database.");
+}
+
 public sealed class CheckpointingSchemaMigrator : ISchemaMigrator
 {
     private readonly ISchemaMigrator _inner;

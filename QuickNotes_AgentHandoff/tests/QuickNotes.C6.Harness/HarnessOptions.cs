@@ -14,9 +14,10 @@ public enum HarnessScenario
 }
 
 /// <summary>
-/// Parsed C6 harness command line. This is the CLI contract shared with the
+/// Parsed C6 harness command line. The CLI contract is shared with the
 /// PowerShell drivers. Task 2 realizes save/backup; Task 3 adds restore,
-/// migrate, seed, and restart; perf remains Task 5.
+/// migrate, seed, and restart; Task 4 adds the restore pause/single-instance
+/// and failed-rollback composition; perf remains Task 5.
 /// <see cref="CheckpointDirectory"/> is null for the documented perf, seed,
 /// and restart forms, which do not inject checkpoints.
 /// </summary>
@@ -72,6 +73,37 @@ public sealed record HarnessOptions
     /// </summary>
     public Guid? ProbeNoteId { get; init; }
 
+    /// <summary>
+    /// Restore-only pause checkpoint used by the Task 4 second-instance case.
+    /// The scenario writes the marker, then waits for the release file (or the
+    /// pause timeout) before continuing, so another process can start while the
+    /// restore is provably between its journal write and the database switch.
+    /// </summary>
+    public string? PauseAt { get; init; }
+
+    public int PauseSeconds { get; init; } = 60;
+
+    /// <summary>
+    /// Release file for <see cref="PauseAt"/>. When absent the scenario watches
+    /// <c>&lt;checkpoint-dir&gt;\&lt;pause marker&gt;.release</c>.
+    /// </summary>
+    public string? PauseReleasePath { get; init; }
+
+    /// <summary>
+    /// Restore-only: acquire the production single-instance lock for the
+    /// disposable data root and hold it for the whole restore. The second
+    /// instance probe then has to activate this owner or fail explicitly.
+    /// </summary>
+    public bool SingleInstanceHold { get; init; }
+
+    /// <summary>
+    /// Restore-only harness fault: after a successful switch, drive the real
+    /// coordinator into its rollback path and make the rollback itself fail.
+    /// That is the production <c>WritesBlocked</c> path (C6-M03); it is test
+    /// composition only and never a production hook.
+    /// </summary>
+    public bool FaultRollback { get; init; }
+
     public HarnessFaultMode FaultMode =>
         FaultDiskFull ? HarnessFaultMode.DiskFull
         : FaultOffline ? HarnessFaultMode.Offline
@@ -100,14 +132,20 @@ public sealed record HarnessOptions
         string? runId = null;
         string? draftDirectory = null;
         string? killMarker = null;
+        string? pauseAt = null;
+        string? pauseReleasePath = null;
         Guid? probeNoteId = null;
         var faultDiskFull = false;
         var faultOffline = false;
         var faultPostSwitch = false;
+        var faultRollback = false;
+        var singleInstanceHold = false;
         var noteCount = C6Budget.HistoricalNotes;
         var visibleCount = C6Budget.VisibleWindows;
         var sourceSchema = 1;
         var iterations = 30;
+        var pauseSeconds = 60;
+        var pauseSecondsSpecified = false;
 
         for (var index = 1; index < args.Length; index++)
         {
@@ -149,6 +187,16 @@ public sealed record HarnessOptions
                 case "--kill-marker":
                     killMarker = ReadValue(args, ref index, "--kill-marker");
                     break;
+                case "--pause-at":
+                    pauseAt = ReadValue(args, ref index, "--pause-at");
+                    break;
+                case "--pause-seconds":
+                    pauseSeconds = ReadInt(args, ref index, "--pause-seconds", minimum: 1, maximum: 600);
+                    pauseSecondsSpecified = true;
+                    break;
+                case "--pause-release":
+                    pauseReleasePath = ReadValue(args, ref index, "--pause-release");
+                    break;
                 case "--probe-note-id":
                     probeNoteId = ReadGuid(args, ref index, "--probe-note-id");
                     break;
@@ -160,6 +208,12 @@ public sealed record HarnessOptions
                     break;
                 case "--fault-post-switch":
                     faultPostSwitch = true;
+                    break;
+                case "--fault-rollback":
+                    faultRollback = true;
+                    break;
+                case "--single-instance":
+                    singleInstanceHold = true;
                     break;
                 default:
                     throw new ArgumentException($"Unknown option '{args[index]}'.");
@@ -184,9 +238,14 @@ public sealed record HarnessOptions
             FaultOffline = faultOffline,
             KillMarker = killMarker,
             FaultPostSwitch = faultPostSwitch,
-            ProbeNoteId = probeNoteId
+            ProbeNoteId = probeNoteId,
+            PauseAt = pauseAt,
+            PauseSeconds = pauseSeconds,
+            PauseReleasePath = pauseReleasePath,
+            SingleInstanceHold = singleInstanceHold,
+            FaultRollback = faultRollback
         };
-        parsed.Validate();
+        parsed.Validate(pauseSecondsSpecified);
         return parsed;
     }
 
@@ -203,7 +262,7 @@ public sealed record HarnessOptions
             _ => throw new ArgumentOutOfRangeException(nameof(scenario), scenario, "Unknown scenario.")
         };
 
-    private void Validate()
+    private void Validate(bool pauseSecondsSpecified)
     {
         if (VisibleCount > NoteCount)
         {
@@ -259,6 +318,61 @@ public sealed record HarnessOptions
         {
             throw new ArgumentException(
                 "--fault-post-switch is only supported by the restore scenario.");
+        }
+
+        if (FaultRollback && Scenario != HarnessScenario.Restore)
+        {
+            throw new ArgumentException(
+                "--fault-rollback is only supported by the restore scenario.");
+        }
+
+        if (SingleInstanceHold && Scenario != HarnessScenario.Restore)
+        {
+            throw new ArgumentException(
+                "--single-instance is only supported by the restore scenario.");
+        }
+
+        if (PauseAt is not null)
+        {
+            if (Scenario != HarnessScenario.Restore)
+            {
+                throw new ArgumentException(
+                    "--pause-at is only supported by the restore scenario.");
+            }
+
+            if (!string.Equals(PauseAt, CheckpointNames.RestoreBeforeSwitch, StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    $"--pause-at must be '{CheckpointNames.RestoreBeforeSwitch}'.");
+            }
+
+            if (string.IsNullOrWhiteSpace(RunId))
+            {
+                throw new ArgumentException(
+                    "--pause-at requires --run-id so the paused restore is scoped to one C6 run.");
+            }
+
+            if (KillMarker is not null)
+            {
+                throw new ArgumentException(
+                    "--pause-at cannot be combined with --kill-marker.");
+            }
+        }
+
+        if (PauseSeconds is < 1 or > 600)
+        {
+            throw new ArgumentException("--pause-seconds must be between 1 and 600.");
+        }
+
+        if (pauseSecondsSpecified && Scenario != HarnessScenario.Restore)
+        {
+            throw new ArgumentException(
+                "--pause-seconds is only supported by the restore scenario.");
+        }
+
+        if (PauseReleasePath is not null && PauseAt is null)
+        {
+            throw new ArgumentException("--pause-release is only valid with --pause-at.");
         }
 
         if (DraftDirectory is not null && Scenario != HarnessScenario.Save)
@@ -340,14 +454,23 @@ public sealed record HarnessOptions
         return args[index];
     }
 
-    private static int ReadInt(string[] args, ref int index, string option, int minimum)
+    private static int ReadInt(
+        string[] args,
+        ref int index,
+        string option,
+        int minimum,
+        int maximum = int.MaxValue)
     {
         var value = ReadValue(args, ref index, option);
         if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
-            || parsed < minimum)
+            || parsed < minimum
+            || parsed > maximum)
         {
+            var range = maximum == int.MaxValue
+                ? $"greater than or equal to {minimum}"
+                : $"between {minimum} and {maximum}";
             throw new ArgumentException(
-                $"Option {option} requires an integer greater than or equal to {minimum}.");
+                $"Option {option} requires an integer {range}.");
         }
 
         return parsed;

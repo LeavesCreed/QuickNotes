@@ -29,7 +29,36 @@ public sealed record HarnessScenarioResult
     public RestartEvidence? Restart { get; init; }
     public BackupScenarioEvidence? Backup { get; init; }
     public RestartProbeEvidence? RestartProbe { get; init; }
+    public RestoreStatus? RestoreStatus { get; init; }
+    public bool? WritesBlocked { get; init; }
+    public bool? RolledBack { get; init; }
+    public InstanceEvidence? Instance { get; init; }
+    public RestorePauseEvidence? Pause { get; init; }
     public string? Message { get; init; }
+}
+
+/// <summary>
+/// Single-instance ownership observed by a restore run. The harness holds the
+/// real production lock and activation pipe for the disposable data root; a
+/// second normal instance must either activate this owner or fail explicitly.
+/// </summary>
+public sealed record InstanceEvidence
+{
+    public required string StartResult { get; init; }
+    public required int ActivationCount { get; init; }
+}
+
+/// <summary>
+/// Bounded pause at a restore checkpoint. The marker is written before the
+/// pause starts; <see cref="Released"/> is true only when the release file was
+/// observed before the timeout.
+/// </summary>
+public sealed record RestorePauseEvidence
+{
+    public required string Checkpoint { get; init; }
+    public required bool MarkerWritten { get; init; }
+    public required bool Released { get; init; }
+    public long WaitMilliseconds { get; init; }
 }
 
 /// <summary>
