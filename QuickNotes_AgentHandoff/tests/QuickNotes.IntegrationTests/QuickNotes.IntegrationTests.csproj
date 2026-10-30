@@ -27,6 +27,7 @@
     <ProjectReference Include="..\..\src\QuickNotes.Infrastructure.Sqlite\QuickNotes.Infrastructure.Sqlite.csproj" />
     <ProjectReference Include="..\..\src\QuickNotes.Infrastructure.Drafts\QuickNotes.Infrastructure.Drafts.csproj" />
     <ProjectReference Include="..\..\src\QuickNotes.Infrastructure.Backup\QuickNotes.Infrastructure.Backup.csproj" />
+    <ProjectReference Include="..\QuickNotes.C6.Harness\QuickNotes.C6.Harness.csproj" />
   </ItemGroup>
 
 </Project>

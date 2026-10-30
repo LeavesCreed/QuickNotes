@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\QuickNotes.Domain\QuickNotes.Domain.csproj" />
+    <ProjectReference Include="..\..\src\QuickNotes.Application\QuickNotes.Application.csproj" />
+    <ProjectReference Include="..\..\src\QuickNotes.Infrastructure.Sqlite\QuickNotes.Infrastructure.Sqlite.csproj" />
+    <ProjectReference Include="..\..\src\QuickNotes.Desktop.Core\QuickNotes.Desktop.Core.csproj" />
+  </ItemGroup>
+
+</Project>
