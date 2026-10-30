@@ -18,9 +18,9 @@ namespace QuickNotes.C6.Harness
 {
     /// <summary>
     /// Task 2 realizes the save and backup bodies. Task 3 adds the restore,
-    /// migration, seed, and restart bodies. Perf remains contract-only until
-    /// Task 5 and keeps returning <see cref="NotImplementedExitCode"/> instead
-    /// of pretending to run.
+    /// migration, seed, and restart bodies. Task 5 realizes the perf body and
+    /// gates its verdict on <c>C6_BUDGETS_CONFIRMED=1</c>; without that exact
+    /// value the perf result is baseline-only (<c>budgetStatus=unconfirmed</c>).
     /// </summary>
     public static class HarnessRunner
     {
@@ -36,6 +36,17 @@ namespace QuickNotes.C6.Harness
         {
             ArgumentNullException.ThrowIfNull(options);
             cancellationToken.ThrowIfCancellationRequested();
+
+            if (options.Scenario == HarnessScenario.Perf)
+            {
+                var perf = await PerfScenario.RunAsync(
+                        options,
+                        C6Budget.IsConfirmedInEnvironment(),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                Console.Out.WriteLine(JsonSerializer.Serialize(perf, SerializerOptions));
+                return perf.Passed ? 0 : ScenarioFailedExitCode;
+            }
 
             HarnessScenarioResult? result = options.Scenario switch
             {

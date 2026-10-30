@@ -299,18 +299,14 @@ public sealed class HarnessOptionsTests
     }
 
     [Fact]
-    public async Task HarnessRunner_KnownScenarioReportsNotImplementedExitCode()
+    public void HarnessRunner_PerfScenarioIsRealizedInsteadOfReturningNotImplemented()
     {
-        var options = HarnessOptions.Parse(new[]
-        {
-            "perf", "--data-root", DataRoot, "--notes", "1000", "--visible", "20",
-            "--iterations", "30", "--output", OutputPath
-        });
-
-        var exitCode = await HarnessRunner.RunAsync(options, CancellationToken.None);
-
-        Assert.Equal(HarnessRunner.NotImplementedExitCode, exitCode);
-        Assert.Equal(78, HarnessRunner.NotImplementedExitCode);
+        // Task 5 realizes the last contract-only scenario. The not-implemented
+        // exit code stays defined for future scenarios, but perf must now run
+        // its real service probe and be reachable through the documented form.
+        Assert.Equal("perf", HarnessOptions.ToCliName(HarnessScenario.Perf));
         Assert.Equal(2, HarnessRunner.UsageExitCode);
+        Assert.Equal(1, HarnessRunner.ScenarioFailedExitCode);
+        Assert.Equal(78, HarnessRunner.NotImplementedExitCode);
     }
 }

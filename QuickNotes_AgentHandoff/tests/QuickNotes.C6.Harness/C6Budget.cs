@@ -20,6 +20,9 @@ public static class C6Budget
     public const string ApprovalStatus = "candidate-unconfirmed";
     public const bool RequiresUserConfirmation = true;
 
+    public const string UnconfirmedBudgetStatus = "unconfirmed";
+    public const string ConfirmedBudgetStatus = "confirmed";
+
     public const int HistoricalNotes = 1000;
     public const int VisibleWindows = 20;
     public static readonly TimeSpan StartupReadyP95 = TimeSpan.FromSeconds(2);
@@ -28,4 +31,20 @@ public static class C6Budget
     public static readonly TimeSpan SaveP99 = TimeSpan.FromMilliseconds(1500);
     public static readonly TimeSpan InputP95 = TimeSpan.FromMilliseconds(100);
     public const long WorkingSetBytes = 300L * 1024 * 1024;
+
+    /// <summary>
+    /// Task 5 gate. Only the exact value "1" confirms the C0 candidate budgets
+    /// as C6 acceptance gates; every other value (including unset) keeps the
+    /// run in baseline-only mode and can never produce a performance pass.
+    /// </summary>
+    public static bool IsConfirmedInEnvironment() =>
+        IsConfirmedInEnvironmentValue(
+            Environment.GetEnvironmentVariable(ConfirmationEnvironmentVariable));
+
+    /// <summary>
+    /// Pure form of <see cref="IsConfirmedInEnvironment"/> so the exact-match
+    /// rule can be tested without mutating the process environment.
+    /// </summary>
+    public static bool IsConfirmedInEnvironmentValue(string? value) =>
+        string.Equals(value, "1", StringComparison.Ordinal);
 }
