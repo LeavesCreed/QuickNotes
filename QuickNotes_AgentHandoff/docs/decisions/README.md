@@ -23,6 +23,7 @@
 | C4 备份调度/状态 | [C4 备份调度、运行状态与目录切换](2026-10-28-c4-backup-scheduling-and-status.md) | 已接受（候选周期/通知策略） | 启动/15 分钟/唤醒检查、非重入、目录校验与切换、`backup-status.json`、手动删除边界 |
 | C4 恢复交互/会话 | [C4 恢复交互、编辑冻结与旧会话失效](2026-10-28-c4-restore-interaction-and-session-invalidation.md) | 已接受（随 C4 实施记录） | 冻结/保存/草稿、先失效旧会话、恢复进度/取消、草稿恢复边界、宿主刷新、设备设置不覆盖 |
 | C5 共享会话/桌面行为 | [C5 共享会话与桌面行为决策](2026-10-30-c5-shared-sessions-and-desktop-behavior.md) | 已接受（随 C5 实施记录） | 共享会话引用计数、独立便签窗口/焦点、托盘/关闭/启动、全局隐藏、Win32 快捷键、DIP 布局与设备显示绑定 |
+| C6 Harness/隔离故障/性能门禁 | [C6 测试 Harness、隔离故障与性能门禁决策](2026-10-30-c6-test-harness-and-performance-gates.md) | 已记录（性能验收开放） | test-only Harness/UiProbe、无生产测试分支、临时 VHD/ACL/RunId 强杀边界、C0 预算确认门禁、2h 60s/121 样本、默认套件隔离、PASS/FAIL/NOT RUN 语义 |
 
 相关产品与阶段文档：
 
@@ -50,3 +51,8 @@
 - [C5 设备与人工矩阵](../agent/C5-设备与人工矩阵.md)
 - [C5 错误 UX 清单](../agent/C5-错误UX清单.md)
 - [C5-B 人工检查清单](../agent/C5-B-人工检查清单.md)
+- [C6 测试报告](../agent/C6-测试报告.md)
+- [C6 故障矩阵](../agent/C6-故障矩阵.md)
+- [C6 性能与稳定性报告](../agent/C6-性能与稳定性报告.md)
+- [C6 完成总结](../agent/C6-完成总结.md)
+- [C6-M 人工检查清单](../agent/C6-M-人工检查清单.md)

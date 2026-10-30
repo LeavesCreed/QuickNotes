@@ -1,17 +1,18 @@
 # QuickNotes（C 阶段桌面与数据原型）
 
-QuickNotes 是面向 Windows 11 x64 的桌面便签软件。当前仓库包含数据/备份层、C1 桌面宿主/启动安全、C2 最小编辑闭环、C3 schema v2/迁移/确定性变更检测、C4 备份中心/调度/恢复交互与 C5 管理中心/桌面行为；**C6 真实故障/性能/稳定性与 C7 交付评审尚未开始**。OS 通知、导出与安装器仍未实现。
+QuickNotes 是面向 Windows 11 x64 的桌面便签软件。当前仓库包含数据/备份层、C1 桌面宿主/启动安全、C2 最小编辑闭环、C3 schema v2/迁移/确定性变更检测、C4 备份中心/调度/恢复交互、C5 管理中心/桌面行为与 C6 真实故障/性能/稳定性测试 Harness；**C6 自动化与故障矩阵已完成，但验收不通过（性能聚合 FAIL、2h 长稳未运行、4 项存储故障未运行、C5-M 未执行）；C7 交付评审尚未开始**。OS 通知、导出与安装器仍未实现。
 
 ## 当前状态
 
 - B0–B7、C0–C5 已实现；C5 合并提交 `2f766e5`，焦点修复 `9019fe7`。C4 完成备份目录配置、手动备份/列表/校验/删除、15 分钟调度、恢复进度/冻结/会话失效与恢复后刷新。
 - C5 完成管理中心、分类/标签/生命周期、批量/撤销/副本、独立便签窗口、共享编辑会话、托盘/关闭/启动、全局隐藏、全局快捷键、窗口找回/DPI 与设置页。
+- C6 完成 test-only Harness/UiProbe、临时 VHD/ACL 故障驱动、检查点强杀/重启、恢复不变量、1,000/20 性能与长稳门禁；**C6-F02/F03 PASS、C6-K01–K09 PASS、C6-M01–M05 自动化 PASS；C6-F01/F04/F05/F06 NOT RUN；性能聚合 FAIL（F-C6-PERF-01）；2h 长稳 NOT RUN；C5-M/C6-M06 NOT RUN**。C6 未通过验收。
 - C1 交付可启动的 WPF 启动/诊断宿主：单实例、正式数据目录、启动恢复状态机、恢复产物识别、缺失库/损坏库/阻断恢复的最小入口。
 - C2 交付最小工作区：Active 便签列表、标题/正文编辑、自动保存与 Ctrl+S、保存/草稿状态、冲突/未知结果处理、重启草稿恢复。
 - C3 交付 schema v2（颜色/字号/逻辑窗口布局、应用设置、数据库身份/变更序号）、启动迁移与保护快照、v1 包迁移恢复、快照基线。
 - C4 交付备份中心、首启目录提示、启动/周期/唤醒调度、备份列表/校验/手动删除、恢复确认/进度/取消、恢复后服务刷新与草稿边界。
-- 当前 C5-M 真实托盘/快捷键/开机启动/多显示器/DPI 人工矩阵未执行；C4 人工检查仍未执行。
-- 当前交付物是类库 + WPF 管理中心/便签窗口/托盘/诊断/备份宿主 + 自动化测试；测试、WPF 冒烟与部分 UI 自动化是当前可执行入口。
+- 当前 C5-M 真实托盘/快捷键/开机启动/多显示器/DPI 人工矩阵未执行；C4 人工检查仍未执行；C6 性能/长稳/存储未运行项见 C6 报告。
+- 当前交付物是类库 + WPF 管理中心/便签窗口/托盘/诊断/备份宿主 + C6 测试 Harness/UiProbe + 自动化测试；测试、WPF 冒烟与部分 UI 自动化是当前可执行入口。
 
 ## 环境要求
 
@@ -46,6 +47,8 @@ C4 追加指标：测试总计 **468/468**（单元 141 + 集成 178 + 桌面 14
 
 C5 追加指标：测试总计 **510/510**（单元 160 + 集成 187 + 桌面 163），构建 0 警告、0 错误；漏洞审计 10 个项目无已知漏洞包；普通启动/`--startup` 冒烟通过；UI 自动化覆盖新建焦点、双向同步、归档恢复与顶栏；C5-M 人工矩阵未执行；详见 [C5 测试报告](docs/agent/C5-测试报告.md)。
 
+C6 追加指标（分支 `feature/c6-fault-stability`，代码 HEAD `f4c3031`）：测试总计 **659 通过 / 7 跳过 / 0 失败**（单元 160 + 集成 336 + 桌面 163）；C6 聚焦 **149 通过 / 7 跳过**；构建 0 警告、0 错误；漏洞审计 **12 个项目无已知漏洞包**；WPF 普通启动/`--startup` 冒烟通过。C6 故障矩阵、性能与未运行项见 [C6 测试报告](docs/agent/C6-测试报告.md)、[C6 故障矩阵](docs/agent/C6-故障矩阵.md)、[C6 性能与稳定性报告](docs/agent/C6-性能与稳定性报告.md)、[C6 完成总结](docs/agent/C6-完成总结.md)。**C6 性能聚合 FAIL（F-C6-PERF-01）、2h 长稳 NOT RUN、C6-F01/F04/F05/F06 NOT RUN、C5-M/C6-M06 NOT RUN，C6 未通过验收。**
+
 ## 运行桌面应用
 
 ```powershell
@@ -67,7 +70,7 @@ dotnet run --project QuickNotes_AgentHandoff/src/QuickNotes.Desktop.Wpf/QuickNot
 - 第二实例会尝试激活第一实例；同一数据根只允许一个实例。
 - 只使用临时数据根，不要指向真实用户数据。
 
-测试只使用临时目录与合成数据，不接触真实用户数据。完整结果、未运行项与环境见 [B7 测试报告](docs/agent/B7-测试报告.md)、[C1 测试报告](docs/agent/C1-测试报告.md)、[C2 测试报告](docs/agent/C2-测试报告.md)、[C3 测试报告](docs/agent/C3-测试报告.md)、[C4 测试报告](docs/agent/C4-测试报告.md)、[C5 测试报告](docs/agent/C5-测试报告.md)。
+测试只使用临时目录与合成数据，不接触真实用户数据。完整结果、未运行项与环境见 [B7 测试报告](docs/agent/B7-测试报告.md)、[C1 测试报告](docs/agent/C1-测试报告.md)、[C2 测试报告](docs/agent/C2-测试报告.md)、[C3 测试报告](docs/agent/C3-测试报告.md)、[C4 测试报告](docs/agent/C4-测试报告.md)、[C5 测试报告](docs/agent/C5-测试报告.md)、[C6 测试报告](docs/agent/C6-测试报告.md)、[C6 故障矩阵](docs/agent/C6-故障矩阵.md)、[C6 性能与稳定性报告](docs/agent/C6-性能与稳定性报告.md)。
 
 ## 已实现能力
 
@@ -106,8 +109,11 @@ QuickNotes_AgentHandoff/
 │  └─ QuickNotes.Desktop.Wpf/            WPF 启动诊断宿主
 ├─ tests/
 │  ├─ QuickNotes.UnitTests/              纯单元测试
-│  ├─ QuickNotes.IntegrationTests/       真实 SQLite/文件系统/故障注入测试
+│  ├─ QuickNotes.IntegrationTests/       真实 SQLite/文件系统/故障注入测试（含 C6）
+│  ├─ QuickNotes.C6.Harness/             C6 test-only 故障/性能 Harness
+│  ├─ QuickNotes.C6.UiProbe/             C6 test-only WPF 性能探针
 │  └─ QuickNotes.Desktop.Tests/          桌面宿主/单实例/启动恢复测试
+├─ scripts/c6/                           C6 临时 VHD/ACL/强杀/性能驱动与清理
 ├─ docs/                                 产品、Agent、计划、ADR、阶段总结
 └─ QuickNotes.DataPrototype.sln
 ```
@@ -116,18 +122,23 @@ QuickNotes_AgentHandoff/
 
 - 产品基线：[PRD v1.0](docs/product/PRD_v1.0.md)
 - B 阶段任务与验收：[Agent 对接文档](docs/agent/Agent对接文档_B阶段.md)
-- 阶段完成总结：[B1](docs/agent/B1-完成总结.md)、[B2](docs/agent/B2-完成总结.md)、[B3](docs/agent/B3-完成总结.md)、[B4](docs/agent/B4-完成总结.md)、[B5](docs/agent/B5-完成总结.md)、[B6](docs/agent/B6-完成总结.md)、[B7](docs/agent/B7-完成总结.md)、[C1](docs/agent/C1-完成总结.md)、[C2](docs/agent/C2-完成总结.md)、[C3](docs/agent/C3-完成总结.md)、[C4](docs/agent/C4-完成总结.md)
+- 阶段完成总结：[B1](docs/agent/B1-完成总结.md)、[B2](docs/agent/B2-完成总结.md)、[B3](docs/agent/B3-完成总结.md)、[B4](docs/agent/B4-完成总结.md)、[B5](docs/agent/B5-完成总结.md)、[B6](docs/agent/B6-完成总结.md)、[B7](docs/agent/B7-完成总结.md)、[C1](docs/agent/C1-完成总结.md)、[C2](docs/agent/C2-完成总结.md)、[C3](docs/agent/C3-完成总结.md)、[C4](docs/agent/C4-完成总结.md)、[C5](docs/agent/C5-完成总结.md)、[C6](docs/agent/C6-完成总结.md)
 - C0 基线：[环境与基线报告](docs/agent/C0-环境与基线报告.md)、[PRD 覆盖表](docs/agent/C阶段-PRD覆盖表.md)、[集成设计与风险](docs/agent/C0-集成设计与风险.md)
 - C1 证据：[测试报告](docs/agent/C1-测试报告.md)、[人工检查清单](docs/agent/C1-人工检查清单.md)
 - C2 证据：[测试报告](docs/agent/C2-测试报告.md)、[人工检查清单](docs/agent/C2-人工检查清单.md)
 - C3 证据：[测试报告](docs/agent/C3-测试报告.md)、[字段与恢复策略](docs/agent/C阶段-字段与恢复策略.md)
 - C4 证据：[测试报告](docs/agent/C4-测试报告.md)、[人工检查清单](docs/agent/C4-人工检查清单.md)、[错误 UX 清单](docs/agent/C4-错误UX清单.md)
 - C5 证据：[测试报告](docs/agent/C5-测试报告.md)、[完成总结](docs/agent/C5-完成总结.md)、[设备与人工矩阵](docs/agent/C5-设备与人工矩阵.md)、[错误 UX 清单](docs/agent/C5-错误UX清单.md)、[C5-B 人工检查清单](docs/agent/C5-B-人工检查清单.md)
+- C6 证据：[测试报告](docs/agent/C6-测试报告.md)、[故障矩阵](docs/agent/C6-故障矩阵.md)、[性能与稳定性报告](docs/agent/C6-性能与稳定性报告.md)、[完成总结](docs/agent/C6-完成总结.md)、[C6-M 人工检查清单](docs/agent/C6-M-人工检查清单.md)
 - 数据模型与备份格式：[B7 数据模型与备份格式](docs/agent/B7-数据模型与备份格式.md)
 - 技术与范围决策：[ADR 索引](docs/decisions/README.md)
 - 测试证据：[B7 测试报告](docs/agent/B7-测试报告.md)
 - 限制与后续：[B7 已知限制与后续建议](docs/agent/B7-已知限制与后续建议.md)
 - 实施计划：[B7 交付计划](docs/superpowers/plans/2026-10-28-b7-delivery.md)、[C6 故障/性能/稳定性计划](docs/superpowers/plans/2026-10-30-c6-fault-performance-stability.md)（其余计划在 `docs/superpowers/plans/`）
+
+## C6 状态与 C7 入口
+
+C6 已完成 test-only Harness/UiProbe、隔离存储故障驱动、检查点强杀/重启、恢复不变量、1,000/20 性能与长稳门禁，默认全量 659 通过/7 跳过/0 失败。但 **C6 验收不通过**：C6-F01/F04/F05/F06 NOT RUN；性能聚合 FAIL（F-C6-PERF-01，UI 启动 p95 4,506.73/4,411.15 ms vs 3,000 ms）；2 小时长稳 NOT RUN；C5-M/C6-M06 NOT RUN。C7 开始前必须关闭或书面风险接受上述事项，并完成 UI 级 C6-M02/M03 人工检查；任何生产代码变更后需重跑全量测试、漏洞审计、WPF 冒烟与相关 C6 门禁。详见 [C6 完成总结](docs/agent/C6-完成总结.md)。
 
 ## 安全与范围说明
 
@@ -138,4 +149,5 @@ QuickNotes_AgentHandoff/
 - C2 草稿只保证已成功落盘的内容；强杀/断电可能丢失最后约 300ms 输入，真实故障边界留 C6。
 - C3 迁移保护快照与备份包未加密；设备设置文件不进入备份；C5 已提供设置页与多屏适配。
 - C4 备份运行状态/草稿恢复边界在工作区数据根；C5 已接入托盘、全局快捷键、开机启动与设置页，OS 系统通知仍未实现。
-- C5-M 真实托盘/快捷键/开机启动/多屏/DPI 人工矩阵仍未执行；导出与性能/长时间稳定性属于后续/C6。
+- C5-M 真实托盘/快捷键/开机启动/多屏/DPI 人工矩阵仍未执行；导出仍不在 C5/C6 范围。
+- C6 已实现 test-only Harness/UiProbe 与隔离故障驱动；**未修改生产代码**。C6 性能聚合 FAIL（F-C6-PERF-01）、2h 长稳 NOT RUN、C6-F01/F04/F05/F06 NOT RUN、C5-M/C6-M06 NOT RUN；真实断电/所有硬件覆盖未声明。C7 入口条件见 [C6 完成总结](docs/agent/C6-完成总结.md)。
